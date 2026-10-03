@@ -7,3 +7,5 @@ local.settings.json
 node_modules/
 .DS_Store
 xcuserdata/
+__pycache__/
+graphify-out/
