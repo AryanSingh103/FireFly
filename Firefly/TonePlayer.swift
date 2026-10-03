@@ -1,74 +1,76 @@
 import AVFoundation
 
+/// Beeps and guide chimes via AVAudioPlayer (no second AVAudioEngine — that fights AlwaysListener).
 final class TonePlayer {
-    private let engine = AVAudioEngine()
-    private let beepNode = AVAudioPlayerNode()
-    private let chimeNode = AVAudioPlayerNode()
-    private let beepBuffer: AVAudioPCMBuffer
-    private let chimeBuffer: AVAudioPCMBuffer
+    private var player: AVAudioPlayer?
+    private let beepData: Data
+    private let chimeData: Data
 
     init() {
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
-        beepBuffer = TonePlayer.makeBeep(format: format)
-        chimeBuffer = TonePlayer.makeChime(format: format)
-
-        // Record-capable so voice questions work. A2DP only (no hands-free profile) keeps
-        // Bluetooth earbuds in stereo, which the left/right panning depends on.
-        let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
-        try? audioSession.setAllowHapticsAndSystemSoundsDuringRecording(true)
-        try? audioSession.setActive(true)
-
-        engine.attach(beepNode)
-        engine.attach(chimeNode)
-        engine.connect(beepNode, to: engine.mainMixerNode, format: format)
-        engine.connect(chimeNode, to: engine.mainMixerNode, format: format)
-        try? engine.start()
-    }
-
-    /// Obstacle warning. pan: -1 is the left ear, 0 is both, 1 is the right ear.
-    func beep(pan: Float) {
-        play(beepBuffer, on: beepNode, pan: pan)
-    }
-
-    /// Destination beacon.
-    func chime(pan: Float) {
-        play(chimeBuffer, on: chimeNode, pan: pan)
-    }
-
-    private func play(_ buffer: AVAudioPCMBuffer, on node: AVAudioPlayerNode, pan: Float) {
-        // The engine stops itself when earbuds are plugged in or removed.
-        if !engine.isRunning {
-            try? engine.start()
+        beepData = TonePlayer.render(duration: 0.06) { time, progress in
+            sin(2 * Float.pi * 880 * time) * sin(Float.pi * progress) * 0.55
         }
-        guard engine.isRunning else { return }
-        node.pan = pan
-        node.scheduleBuffer(buffer, at: nil, options: .interrupts)
-        node.play()
-    }
-
-    private static func makeBeep(format: AVAudioFormat) -> AVAudioPCMBuffer {
-        makeBuffer(format: format, duration: 0.06) { time, progress in
-            sin(2 * Float.pi * 880 * time) * sin(Float.pi * progress) * 0.6
-        }
-    }
-
-    private static func makeChime(format: AVAudioFormat) -> AVAudioPCMBuffer {
-        makeBuffer(format: format, duration: 0.35) { time, progress in
+        chimeData = TonePlayer.render(duration: 0.35) { time, progress in
             let bell = sin(2 * Float.pi * 1320 * time) + 0.4 * sin(2 * Float.pi * 1980 * time)
-            let attack = min(progress * 40, 1)
-            return bell * attack * exp(-6 * progress) * 0.35
+            return bell * min(progress * 40, 1) * exp(-6 * progress) * 0.32
         }
+
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+        try? session.setActive(true)
     }
 
-    private static func makeBuffer(format: AVAudioFormat, duration: Double, sample: (_ time: Float, _ progress: Float) -> Float) -> AVAudioPCMBuffer {
-        let frameCount = AVAudioFrameCount(duration * format.sampleRate)
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)!
-        buffer.frameLength = frameCount
-        let samples = buffer.floatChannelData![0]
-        for i in 0..<Int(frameCount) {
-            samples[i] = sample(Float(i) / Float(format.sampleRate), Float(i) / Float(frameCount))
+    func beep(pan: Float = 0) {
+        play(beepData, pan: pan)
+    }
+
+    func chime(pan: Float = 0) {
+        play(chimeData, pan: pan)
+    }
+
+    private func play(_ data: Data, pan: Float) {
+        guard let next = try? AVAudioPlayer(data: data) else { return }
+        next.pan = pan
+        next.prepareToPlay()
+        player = next
+        next.play()
+    }
+
+    private static func render(duration: Double, sample: (_ time: Float, _ progress: Float) -> Float) -> Data {
+        let sampleRate = 44_100
+        let frameCount = Int(duration * Double(sampleRate))
+        var data = Data(count: 44 + frameCount * 2)
+        data.withUnsafeMutableBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            func write32(_ value: UInt32, at offset: Int) {
+                base.advanced(by: offset).withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee = value.littleEndian }
+            }
+            func write16(_ value: UInt16, at offset: Int) {
+                base.advanced(by: offset).withMemoryRebound(to: UInt16.self, capacity: 1) { $0.pointee = value.littleEndian }
+            }
+            // WAV header, 16-bit mono PCM.
+            memcpy(base, "RIFF", 4)
+            write32(UInt32(36 + frameCount * 2), at: 4)
+            memcpy(base.advanced(by: 8), "WAVE", 4)
+            memcpy(base.advanced(by: 12), "fmt ", 4)
+            write32(16, at: 16)
+            write16(1, at: 20)
+            write16(1, at: 22)
+            write32(UInt32(sampleRate), at: 24)
+            write32(UInt32(sampleRate * 2), at: 28)
+            write16(2, at: 32)
+            write16(16, at: 34)
+            memcpy(base.advanced(by: 36), "data", 4)
+            write32(UInt32(frameCount * 2), at: 40)
+            let samples = UnsafeMutableRawPointer(base.advanced(by: 44)).bindMemory(to: Int16.self, capacity: frameCount)
+            for i in 0..<frameCount {
+                let time = Float(i) / Float(sampleRate)
+                let progress = Float(i) / Float(frameCount)
+                let clipped = max(-1, min(1, sample(time, progress)))
+                samples[i] = Int16(clipped * Float(Int16.max))
+            }
         }
-        return buffer
+        return data
     }
 }

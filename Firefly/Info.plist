@@ -23,11 +23,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Firefly uses the camera and LiDAR to sense obstacles and find doors ahead of you.</string>
+	<string>Firefly uses the camera and LiDAR to sense obstacles and find doors and exits ahead of you.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Firefly listens when you tap so you can ask questions or say where to go.</string>
+	<string>Firefly listens for “Firefly” commands so you can ask where to go hands-free.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Firefly turns your spoken questions into text so it can answer them.</string>
+	<string>Firefly turns your speech into text so it can help you navigate.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Firefly uses your location for walking directions on the map.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

@@ -6,27 +6,31 @@ enum GeminiClient {
     /// The nearest hazard as "<Object>, <left|ahead|right>", or "none".
     static func nearestHazard(in jpeg: Data) async throws -> String {
         let prompt = """
-        This photo is from a phone worn on the chest of a blind person who is walking. \
-        Name only the single nearest hazard in their path, formatted exactly as "<Object>, <left|ahead|right>", \
-        for example "Chair, left". Prefer these object names when they fit: Chair, Table, Desk, Couch, Person, \
-        Wall, Door, Doorway, Backpack, Bag, Stairs, Trash can. If the path is clear, reply "none".
+        This photo is from a chest-worn phone helping a blind walker. \
+        Name only the single nearest hazard in their path as "<Object>, <left|ahead|right>", \
+        for example "Chair, left". Prefer: Chair, Table, Desk, Couch, Person, Wall, Door, Doorway, \
+        Backpack, Bag, Stairs, Trash can, Wet floor sign, Curb, Open door. \
+        If the path is clear, reply "none".
         """
         return try await generate(prompt: prompt, jpeg: jpeg, json: false)
     }
 
     static func answer(_ question: String, in jpeg: Data) async throws -> String {
         let prompt = """
-        You are Firefly, a calm guide for a blind person. This photo is from a phone worn on their chest. \
-        Answer their question in under 10 words, using left, ahead or right for directions. \
+        You are Firefly, a calm enchanted guide for a blind or low-vision person. \
+        This photo is from a phone on their chest. Answer in under 18 words. \
+        Use left, ahead, or right. Be honest if unsure — say you think or aren't sure. \
+        Never claim you can detect glass. Never invent crosswalks or signal colors. \
         Question: \(question)
         """
         return try await generate(prompt: prompt, jpeg: jpeg, json: false)
     }
 
-    /// Centre of the target in the photo as fractions (x from the left, y from the top), or nil if it is not visible.
+    /// Centre of the target in the photo as fractions (x from the left, y from the top), or nil if missing.
     static func locate(_ target: String, in jpeg: Data) async throws -> SIMD2<Float>? {
         let prompt = """
-        Find the \(target) in this photo. If there are several, pick the nearest. Reply with JSON only: \
+        Find the \(target) in this photo (door, doorway, EXIT sign, or exit). \
+        If several, pick the nearest usable one. Reply with JSON only: \
         {"found": true, "box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized to 0-1000, \
         or {"found": false} if it is not visible.
         """

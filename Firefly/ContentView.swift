@@ -1,3 +1,4 @@
+import MapKit
 import SwiftUI
 import UIKit
 
@@ -8,55 +9,42 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: engine.showCamera ? 16 : 32) {
-                Spacer()
+            // Full-bleed camera + red near-depth wash (no grids).
+            CameraStage(preview: engine.preview, alert: engine.alert)
+                .ignoresSafeArea()
 
-                if engine.showCamera, let preview = engine.preview {
-                    DebugCameraView(preview: preview, activeZone: engine.alert?.zone, glow: glow)
-                        .frame(maxHeight: 300)
-                } else {
-                    Circle()
-                        .fill(glow)
-                        .frame(width: 44, height: 44)
-                        .shadow(color: glow, radius: 24)
-                        // Swells while Firefly speaks; otherwise flickers with each haptic pulse.
-                        .scaleEffect(engine.isSpeaking ? 1.4 : engine.pulseCount % 2 == 0 ? 1.0 : 1.15)
-                        .opacity(engine.isSpeaking || engine.alert != nil || engine.mode != .idle ? 1.0 : 0.5)
-                        .animation(.easeOut(duration: 0.12), value: engine.pulseCount)
-                        .animation(.easeInOut(duration: 0.3), value: engine.isSpeaking)
-                        // With VoiceOver on, a single tap only selects, so expose asking as a button action too.
-                        .accessibilityElement()
-                        .accessibilityLabel("Ask Firefly")
-                        .accessibilityHint("Double tap, then speak a question or say where to go.")
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { engine.handleTap() }
+            // Corner minimap pie
+            VStack {
+                HStack {
+                    Spacer()
+                    MinimapPie(maps: engine.maps, glow: glow)
+                        .frame(width: 120, height: 120)
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
                 }
+                Spacer()
+            }
+
+            // Firefly orb + captions
+            VStack {
+                Spacer()
+                FireflyOrb(mood: engine.mood, pulseCount: engine.pulseCount, isSpeaking: engine.isSpeaking, glow: glow)
+                    .padding(.bottom, 8)
 
                 Text(engine.caption)
-                    .font(.title3.weight(.medium))
-                    .foregroundColor(glow)
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.8), radius: 4, y: 1)
                     .multilineTextAlignment(.center)
-                    .frame(minHeight: 60)
-
-                HStack(spacing: 12) {
-                    ForEach(Zone.allCases, id: \.self) { zone in
-                        zoneColumn(zone)
-                    }
-                }
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: 56)
 
                 Text(statusLine)
-                    .font(.footnote)
-                    .foregroundColor(.gray)
-
-                Spacer()
-
-                demoControls
+                    .font(.footnote.weight(.medium))
+                    .foregroundColor(.white.opacity(0.75))
+                    .padding(.bottom, 28)
             }
-            .padding()
         }
-        .contentShape(Rectangle())
-        .onTapGesture { engine.handleTap() }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             engine.start()
@@ -64,97 +52,168 @@ struct ContentView: View {
     }
 
     private var statusLine: String {
-        switch engine.mode {
-        case .listening:
-            return "Listening. Tap to finish."
-        case .thinking:
-            return "Thinking"
-        case .idle:
-            if let name = engine.beaconName { return "Guiding to the \(name)" }
-            return engine.status == "Scanning" ? "Tap anywhere to ask" : engine.status
-        }
+        if engine.quietMode { return "Quiet · haptics only · \(modeLabel)" }
+        return modeLabel
     }
 
-    private var demoControls: some View {
-        VStack(spacing: 10) {
-            if engine.demoMode {
-                HStack(spacing: 12) {
-                    Button("Door") { engine.demoDoor() }
-                    Button("Question") { engine.demoQuestion() }
-                    Button("Cancel") { engine.cancelBeacon() }
-                }
-                .buttonStyle(.bordered)
-                .tint(glow)
+    private var modeLabel: String {
+        switch engine.phase {
+        case .onboarding: return "Setup"
+        case .awaitingNavConfirm: return "Confirm destination"
+        case .handling: return "Thinking"
+        case .ready:
+            if engine.guideMode == .navigate {
+                return engine.beaconName.map { "Guiding to \($0)" }
+                    ?? engine.maps.destinationName.map { "Navigating to \($0)" }
+                    ?? "Navigate"
             }
-            Toggle("Camera view", isOn: $engine.showCamera)
-                .font(.footnote)
-                .foregroundColor(.gray)
-                .tint(glow)
-            Toggle("Demo mode", isOn: $engine.demoMode)
-                .font(.footnote)
-                .foregroundColor(.gray)
-                .tint(glow)
+            return "Passive · say “Firefly …”"
         }
-    }
-
-    private func zoneColumn(_ zone: Zone) -> some View {
-        let distance = engine.distances[zone.rawValue]
-        let isActive = engine.alert?.zone == zone
-        return VStack(spacing: 8) {
-            Text(zone.label)
-                .font(.caption.bold())
-            Text(distance < AlertPolicy.silentBeyond ? String(format: "%.1f m", distance) : "clear")
-                .font(.system(size: 30, weight: .semibold, design: .rounded))
-                .minimumScaleFactor(0.5)
-                .lineLimit(1)
-        }
-        .foregroundColor(isActive ? .black : .white)
-        .frame(maxWidth: .infinity, minHeight: 110)
-        .background(isActive ? glow : Color.white.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }
 
-/// Testing aid: the camera with the LiDAR heat map on top, the three scanned zones, and the point each
-/// zone's distance comes from. Red is near, blue is the edge of the 3 m alert range, uncoloured is ignored.
-struct DebugCameraView: View {
-    let preview: DebugPreview
-    let activeZone: Zone?
-    let glow: Color
+// MARK: - Camera
+
+struct CameraStage: View {
+    let preview: DebugPreview?
+    let alert: ObstacleAlert?
 
     var body: some View {
-        GeometryReader { geometry in
-            let size = geometry.size
-            let bandTop = size.height * CGFloat(DepthZoneAnalyzer.bandTop)
-            let bandHeight = size.height * CGFloat(DepthZoneAnalyzer.bandBottom - DepthZoneAnalyzer.bandTop)
-            ZStack(alignment: .topLeading) {
-                Image(decorative: preview.camera, scale: 1)
-                    .resizable()
-                Image(decorative: preview.depth, scale: 1)
-                    .resizable()
-                    .interpolation(.none)
-
-                ForEach(Zone.allCases, id: \.self) { zone in
-                    let isActive = zone == activeZone
-                    Rectangle()
-                        .strokeBorder(isActive ? glow : Color.white.opacity(0.7), lineWidth: isActive ? 3 : 1)
-                        .frame(width: size.width / 3, height: bandHeight)
-                        .offset(x: size.width / 3 * CGFloat(zone.rawValue), y: bandTop)
-                }
-
-                ForEach(Zone.allCases, id: \.self) { zone in
-                    if let point = preview.points[zone.rawValue] {
-                        Circle()
-                            .stroke(Color.white, lineWidth: 2)
-                            .background(Circle().fill(zone == activeZone ? glow : Color.black.opacity(0.5)))
-                            .frame(width: 14, height: 14)
-                            .position(x: CGFloat(point.x) * size.width, y: CGFloat(point.y) * size.height)
-                    }
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                if let preview {
+                    Image(decorative: preview.camera, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                    // Red wash for nearby depth — no grid lines.
+                    Image(decorative: preview.depth, scale: 1)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFill()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .opacity(alert == nil ? 0.25 : 0.55)
+                        .blendMode(.screen)
+                } else {
+                    ProgressView()
+                        .tint(.white)
                 }
             }
         }
-        .aspectRatio(3.0 / 4.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Orb
+
+struct FireflyOrb: View {
+    let mood: FireflyEngine.Mood
+    let pulseCount: Int
+    let isSpeaking: Bool
+    let glow: Color
+
+    private var visible: Bool {
+        switch mood {
+        case .idle: return false
+        case .listening, .thinking, .guiding, .danger, .happy: return true
+        }
+    }
+
+    private var scale: CGFloat {
+        if mood == .danger { return pulseCount % 2 == 0 ? 1.15 : 1.45 }
+        if isSpeaking { return 1.35 }
+        return pulseCount % 2 == 0 ? 1.0 : 1.12
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(glow.opacity(mood == .danger ? 1 : 0.95))
+                .frame(width: 28, height: 28)
+                .shadow(color: glow, radius: mood == .danger ? 28 : 18)
+                .scaleEffect(scale)
+            // Tiny wing hints
+            Capsule()
+                .fill(glow.opacity(0.45))
+                .frame(width: 18, height: 6)
+                .offset(x: -16, y: -2)
+                .rotationEffect(.degrees(-20))
+            Capsule()
+                .fill(glow.opacity(0.45))
+                .frame(width: 18, height: 6)
+                .offset(x: 16, y: -2)
+                .rotationEffect(.degrees(20))
+        }
+        .opacity(visible ? 1 : 0.15)
+        .animation(.easeOut(duration: 0.15), value: pulseCount)
+        .animation(.easeInOut(duration: 0.25), value: isSpeaking)
+        .animation(.easeInOut(duration: 0.3), value: mood)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Minimap
+
+struct MinimapPie: View {
+    @ObservedObject var maps: MapNavigator
+    let glow: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.55))
+                .overlay(Circle().stroke(glow.opacity(0.7), lineWidth: 2))
+            MinimapRepresentable(maps: maps)
+                .clipShape(Circle())
+                .padding(4)
+        }
+        .accessibilityLabel("Minimap")
+    }
+}
+
+struct MinimapRepresentable: UIViewRepresentable {
+    @ObservedObject var maps: MapNavigator
+
+    func makeUIView(context: Context) -> MKMapView {
+        let map = MKMapView(frame: .zero)
+        map.isUserInteractionEnabled = false
+        map.isZoomEnabled = false
+        map.isScrollEnabled = false
+        map.isPitchEnabled = false
+        map.isRotateEnabled = false
+        map.showsUserLocation = true
+        map.pointOfInterestFilter = .excludingAll
+        map.overrideUserInterfaceStyle = .dark
+        return map
+    }
+
+    func updateUIView(_ map: MKMapView, context: Context) {
+        map.removeOverlays(map.overlays)
+        if let route = maps.route {
+            map.addOverlay(route.polyline)
+            let rect = route.polyline.boundingMapRect
+            map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 20, left: 20, bottom: 20, right: 20), animated: false)
+        } else if let coordinate = maps.userCoordinate {
+            let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 180, longitudinalMeters: 180)
+            map.setRegion(region, animated: false)
+        }
+        map.delegate = context.coordinator
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor(red: 0.85, green: 1, blue: 0.4, alpha: 0.95)
+                renderer.lineWidth = 4
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
     }
 }

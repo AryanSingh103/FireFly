@@ -10,9 +10,8 @@ final class HapticPulser {
     }
 
     func pulse(intensity: Float) {
-        guard let engine else { return }
-        do {
-            let event = CHHapticEvent(
+        play(events: [
+            CHHapticEvent(
                 eventType: .hapticTransient,
                 parameters: [
                     CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
@@ -20,10 +19,29 @@ final class HapticPulser {
                 ],
                 relativeTime: 0
             )
-            let player = try engine.makePlayer(with: CHHapticPattern(events: [event], parameters: []))
+        ])
+    }
+
+    /// Quiet-mode danger: three sharp pulses, no voice.
+    func urgentStop() {
+        play(events: (0..<3).map { index in
+            CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 1)
+                ],
+                relativeTime: Double(index) * 0.12
+            )
+        })
+    }
+
+    private func play(events: [CHHapticEvent]) {
+        guard let engine else { return }
+        do {
+            let player = try engine.makePlayer(with: CHHapticPattern(events: events, parameters: []))
             try player.start(atTime: CHHapticTimeImmediate)
         } catch {
-            // The engine stops when the app is backgrounded or interrupted; restart so the next pulse lands.
             try? engine.start()
         }
     }

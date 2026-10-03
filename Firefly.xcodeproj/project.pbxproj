@@ -22,6 +22,9 @@
 		A1000000000000000000000C /* SpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* SpeechTranscriber.swift */; };
 		A1000000000000000000000D /* TonePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* TonePlayer.swift */; };
 		A1000000000000000000000E /* VoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* VoiceRecorder.swift */; };
+		A10000000000000000000013 /* UserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* UserProfile.swift */; };
+		A10000000000000000000014 /* AlwaysListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* AlwaysListener.swift */; };
+		A10000000000000000000015 /* MapNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* MapNavigator.swift */; };
 		A1000000000000000000000F /* Phrases in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* Phrases */; };
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -42,6 +45,9 @@
 		B1000000000000000000000C /* SpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriber.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* TonePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonePlayer.swift; sourceTree = "<group>"; };
 		B1000000000000000000000E /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
+		B10000000000000000000013 /* UserProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfile.swift; sourceTree = "<group>"; };
+		B10000000000000000000014 /* AlwaysListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlwaysListener.swift; sourceTree = "<group>"; };
+		B10000000000000000000015 /* MapNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapNavigator.swift; sourceTree = "<group>"; };
 		B1000000000000000000000F /* Phrases */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Phrases; sourceTree = "<group>"; };
 		B10000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -84,6 +90,9 @@
 				B1000000000000000000000B /* Speaker.swift */,
 				B1000000000000000000000C /* SpeechTranscriber.swift */,
 				B1000000000000000000000E /* VoiceRecorder.swift */,
+				B10000000000000000000013 /* UserProfile.swift */,
+				B10000000000000000000014 /* AlwaysListener.swift */,
+				B10000000000000000000015 /* MapNavigator.swift */,
 				B1000000000000000000000A /* Secrets.swift */,
 				B1000000000000000000000F /* Phrases */,
 				B10000000000000000000011 /* Assets.xcassets */,
@@ -185,6 +194,9 @@
 				A1000000000000000000000C /* SpeechTranscriber.swift in Sources */,
 				A1000000000000000000000D /* TonePlayer.swift in Sources */,
 				A1000000000000000000000E /* VoiceRecorder.swift in Sources */,
+				A10000000000000000000013 /* UserProfile.swift in Sources */,
+				A10000000000000000000014 /* AlwaysListener.swift in Sources */,
+				A10000000000000000000015 /* MapNavigator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
