@@ -1,0 +1,9 @@
+# Secrets: matched by name anywhere in the repo, so a copy made by Xcode is ignored too
+Secrets.swift
+local.settings.json
+.env
+.env.*
+
+node_modules/
+.DS_Store
+xcuserdata/
