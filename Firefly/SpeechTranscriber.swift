@@ -14,6 +14,8 @@ final class AppleSpeechTranscriber: SpeechTranscriber {
         }
         let request = SFSpeechURLRecognitionRequest(url: fileURL)
         request.shouldReportPartialResults = false
+        // On-device recognition keeps spoken commands working with Wi-Fi off.
+        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         let gate = ResumeGate()
         // Keep the recognizer alive until the callback fires; optimized builds may release it after its last use.
         defer { withExtendedLifetime(recognizer) {} }

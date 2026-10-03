@@ -17,7 +17,7 @@ enum GeminiClient {
     static func answer(_ question: String, in jpeg: Data) async throws -> String {
         let prompt = """
         You are Firefly, a calm guide for a blind person. This photo is from a phone worn on their chest. \
-        Answer their question in under 12 words, using left, ahead or right for directions. \
+        Answer their question in under 10 words, using left, ahead or right for directions. \
         Question: \(question)
         """
         return try await generate(prompt: prompt, jpeg: jpeg, json: false)

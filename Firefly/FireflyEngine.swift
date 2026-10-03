@@ -16,6 +16,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var caption = ""
     @Published private(set) var mode = Mode.idle
     @Published private(set) var beaconName: String?
+    @Published private(set) var isSpeaking = false
     @Published var demoMode = false
     @Published var showCamera = false {
         didSet { if !showCamera { preview = nil } }
@@ -124,6 +125,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             pulseCount += 1
         }
 
+        if speaker.isSpeaking != isSpeaking { isSpeaking = speaker.isSpeaking }
         speakWarnings(now: now)
         updateBeacon(camera: camera, inDanger: inDanger, now: now)
         runSceneLoop(now: now)
@@ -251,6 +253,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         if let recording, let text = await transcribe(recording) {
             caption = "\u{201C}\(text)\u{201D}"
             await respond(to: text)
+        } else if demoMode {
+            await answer("What's in front of me?")
         } else {
             say("I didn't catch that", interrupt: true)
         }
@@ -314,7 +318,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         else { return }
         // An approximate beacon was placed beyond LiDAR range; keep re-locating it until depth is available.
         let refiningName = beacon?.isApproximate == true ? beacon?.name : nil
-        guard refiningName != nil || (alert != nil && beacon == nil) else { return }
+        guard refiningName != nil || alert != nil else { return }
         guard let snapshot = captureSnapshot() else { return }
 
         lastSceneRequest = now
@@ -333,14 +337,18 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// Gemini only names the object. Whether it is still there, and which side it is on, comes from LiDAR,
+    /// so a slow or wrong reply can never send the wearer the wrong way or speak over "Stop".
     private func announceHazard(_ phrase: String) {
-        let hazard = phrase.trimmingCharacters(in: CharacterSet.letters.inverted)
-        let lowered = hazard.lowercased()
-        guard mode == .idle, beacon == nil, !hazard.isEmpty, hazard.count < 40, !lowered.hasPrefix("none") else { return }
+        let object = (phrase.components(separatedBy: ",").first ?? "").trimmingCharacters(in: CharacterSet.letters.inverted)
+        guard mode == .idle, let alert, alert.distance >= stopDistance,
+              !object.isEmpty, object.count < 25, !object.lowercased().hasPrefix("none")
+        else { return }
+        let direction = alert.zone == .center ? "ahead" : alert.zone.label.lowercased()
+        let hazard = "\(object.prefix(1).uppercased())\(object.dropFirst().lowercased()), \(direction)"
         let now = Date()
         if hazard == lastHazard, now.timeIntervalSince(lastHazardTime) < 10 { return }
-        let pan: Float = lowered.hasSuffix("left") ? -1 : lowered.hasSuffix("right") ? 1 : 0
-        if say(hazard, pan: pan) {
+        if say(hazard, pan: alert.zone.pan) {
             lastHazard = hazard
             lastHazardTime = now
         }

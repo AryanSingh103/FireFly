@@ -20,9 +20,11 @@ struct ContentView: View {
                         .fill(glow)
                         .frame(width: 44, height: 44)
                         .shadow(color: glow, radius: 24)
-                        .scaleEffect(engine.pulseCount % 2 == 0 ? 1.0 : 1.3)
-                        .opacity(engine.alert == nil && engine.mode == .idle ? 0.5 : 1.0)
+                        // Swells while Firefly speaks; otherwise flickers with each haptic pulse.
+                        .scaleEffect(engine.isSpeaking ? 1.4 : engine.pulseCount % 2 == 0 ? 1.0 : 1.15)
+                        .opacity(engine.isSpeaking || engine.alert != nil || engine.mode != .idle ? 1.0 : 0.5)
                         .animation(.easeOut(duration: 0.12), value: engine.pulseCount)
+                        .animation(.easeInOut(duration: 0.3), value: engine.isSpeaking)
                         // With VoiceOver on, a single tap only selects, so expose asking as a button action too.
                         .accessibilityElement()
                         .accessibilityLabel("Ask Firefly")
