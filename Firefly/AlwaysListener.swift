@@ -138,13 +138,14 @@ final class AlwaysListener: NSObject {
         silenceTask = nil
         latestText = ""
         generation += 1
-        task?.cancel()
-        task = nil
-        request?.endAudio()
-        request = nil
+        // Stop the mic before ending the request, so the tap can't append audio to a finished request.
         if audioEngine.isRunning {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
+        task?.cancel()
+        task = nil
+        request?.endAudio()
+        request = nil
     }
 }

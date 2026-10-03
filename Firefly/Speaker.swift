@@ -94,8 +94,10 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ finished: AVAudioPlayer, successfully flag: Bool) {
-        MainActor.assumeIsolated {
-            guard finished === player, !queuedClips.isEmpty else { return }
+        // AVFoundation doesn't promise which thread this arrives on, so hop rather than assume.
+        let id = ObjectIdentifier(finished)
+        Task { @MainActor in
+            guard let player, ObjectIdentifier(player) == id, !queuedClips.isEmpty else { return }
             let next = queuedClips.removeFirst()
             if !start(try? AVAudioPlayer(contentsOf: next), pan: queuedPan) { queuedClips = [] }
         }
