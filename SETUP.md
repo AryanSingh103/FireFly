@@ -60,6 +60,7 @@ You should see LEFT / CENTER / RIGHT distances and a glowing dot.
   - "Take me to the door" → chime beacon. "Stop" / "Cancel" ends it.
   - Anything else → question about the camera view.
 - **Demo mode:** toggle at the bottom → Door / Question / Cancel with canned results.
+- **Camera view:** toggle at the bottom → live camera with the LiDAR heat map (red near, blue at 3 m, uncoloured = ignored), the three scanned zones (active one highlighted), and a dot where each zone's distance is measured. For testing and tuning `bandTop` / `bandBottom`.
 
 ## 6. Optional: Firefly voice clips
 

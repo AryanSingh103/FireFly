@@ -17,6 +17,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var mode = Mode.idle
     @Published private(set) var beaconName: String?
     @Published var demoMode = false
+    @Published var showCamera = false {
+        didSet { if !showCamera { preview = nil } }
+    }
+    @Published private(set) var preview: DebugPreview?
 
     private let session = ARSession()
     private let haptics = HapticPulser()
@@ -31,6 +35,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let announceDistance: Float = 1.5
     private let arrivalDistance: Float = 1.2
     private let sceneInterval: TimeInterval = 4
+    private let previewInterval: TimeInterval = 0.1
 
     private var history: [SIMD3<Float>] = []
     private var beacon: Beacon?
@@ -46,6 +51,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var sceneRequestActive = false
     private var lastHazard = ""
     private var lastHazardTime = Date.distantPast
+    private var lastPreview = Date.distantPast
 
     override init() {
         var transcribers: [SpeechTranscriber] = []
@@ -76,12 +82,24 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard let depth = frame.sceneDepth else { return }
         let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
         let camera = frame.camera.transform
-        Task { @MainActor in self.ingest(reading, camera: camera) }
+        // No delegateQueue is set, so ARKit calls this on the main queue. Staying synchronous also means
+        // the preview is built before the frame is released, instead of holding ARFrames in pending tasks.
+        MainActor.assumeIsolated {
+            ingest(reading.distances, camera: camera)
+            updatePreview(from: frame, points: reading.points)
+        }
     }
 
     nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
         let message = error.localizedDescription
         Task { @MainActor in self.status = message }
+    }
+
+    private func updatePreview(from frame: ARFrame, points: [SIMD2<Float>?]) {
+        let now = Date()
+        guard showCamera, now.timeIntervalSince(lastPreview) >= previewInterval else { return }
+        lastPreview = now
+        preview = DebugPreview(frame: frame, points: points)
     }
 
     // MARK: - Safety loop (no network)

@@ -11,6 +11,7 @@
 		A10000000000000000000002 /* Beacon.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* Beacon.swift */; };
 		A10000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* ContentView.swift */; };
 		A10000000000000000000004 /* DepthZoneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* DepthZoneAnalyzer.swift */; };
+		A10000000000000000000012 /* DebugPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* DebugPreview.swift */; };
 		A10000000000000000000005 /* FireflyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* FireflyApp.swift */; };
 		A10000000000000000000006 /* FireflyEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* FireflyEngine.swift */; };
 		A10000000000000000000007 /* FrameSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* FrameSnapshot.swift */; };
@@ -30,6 +31,7 @@
 		B10000000000000000000002 /* Beacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Beacon.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* DepthZoneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthZoneAnalyzer.swift; sourceTree = "<group>"; };
+		B10000000000000000000012 /* DebugPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPreview.swift; sourceTree = "<group>"; };
 		B10000000000000000000005 /* FireflyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireflyApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* FireflyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireflyEngine.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* FrameSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSnapshot.swift; sourceTree = "<group>"; };
@@ -72,6 +74,7 @@
 				B10000000000000000000003 /* ContentView.swift */,
 				B10000000000000000000006 /* FireflyEngine.swift */,
 				B10000000000000000000004 /* DepthZoneAnalyzer.swift */,
+				B10000000000000000000012 /* DebugPreview.swift */,
 				B10000000000000000000001 /* AlertPolicy.swift */,
 				B10000000000000000000002 /* Beacon.swift */,
 				B10000000000000000000007 /* FrameSnapshot.swift */,
@@ -171,6 +174,7 @@
 				A10000000000000000000002 /* Beacon.swift in Sources */,
 				A10000000000000000000003 /* ContentView.swift in Sources */,
 				A10000000000000000000004 /* DepthZoneAnalyzer.swift in Sources */,
+				A10000000000000000000012 /* DebugPreview.swift in Sources */,
 				A10000000000000000000005 /* FireflyApp.swift in Sources */,
 				A10000000000000000000006 /* FireflyEngine.swift in Sources */,
 				A10000000000000000000007 /* FrameSnapshot.swift in Sources */,
