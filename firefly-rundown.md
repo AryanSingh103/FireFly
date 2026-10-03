@@ -269,11 +269,11 @@ Also make sure your Devpost writeup does not copy their phrasing. GirlHacks judg
 
 ## 16. Submission Checklist
 
-- [ ] Devpost project with a clear description
+- [ ] Devpost project with a clear description (draft in `DEVPOST.md`)
 - [ ] GitHub repository link
 - [ ] One line per sponsor: "Gemini: sees. ElevenLabs: speaks. Azure: listens and secures the keys."
 - [ ] Optional 2-3 minute demo video
-- [ ] Tracks selected: First Place, ElevenLabs, Gemini, Enchanted Grove, Avanade (plus Beginner or Diversity if eligible)
+- [ ] Tracks selected: First Place, ElevenLabs, Gemini, Enchanted Grove, Avanade
 - [ ] At least one team representative present at the venue during judging (all teams present in person)
 - [ ] Submit before the deadline
 - [ ] Join the Discord (listed in the hackathon to-dos)
@@ -281,17 +281,40 @@ Also make sure your Devpost writeup does not copy their phrasing. GirlHacks judg
 
 ---
 
-## 17. Open Questions to Confirm Early
+## 17. Confirmed (team)
 
-1. Is the iPhone a Pro model with LiDAR?
-2. Is there a Mac with Xcode, and has anyone written Swift or used ARKit?
-3. How many tracks can you submit to?
-4. What is the actual submission deadline (so the hour plan can be shifted)?
-5. Are you eligible for Best Beginner (50% first-time hackers) or Best Diversity (75% women or non-binary)?
-6. How many people are on the team?
+1. iPhone Pro with LiDAR — **yes**
+2. Mac with Xcode — **yes**
+3. Tracks: First Place + ElevenLabs + Gemini + Enchanted Grove + Avanade (no Beginner / Diversity)
+4. Team size — **3 people**
+5. Roles — irrelevant; finish the project
+
+Still confirm with organizers: how many tracks you can submit to, and the exact submit time.
 
 ---
 
-## 18. Next Step
+## 18. Status and remaining work
 
-Starter Swift code for obstacle warnings (ARKit depth zones, alert policy, Core Haptics and spatial audio) so your first hour ends with a working screen.
+### Done in repo
+- Full Swift app (LiDAR zones, haptics, stereo beeps, door beacon, voice Q&A, Gemini scene loop, demo mode)
+- `Firefly.xcodeproj` + Info.plist privacy keys
+- Apple Speech + Azure Speech path
+- Azure Function proxy code
+- Phrase generation script
+- README + DEVPOST draft + Mac bootstrap script
+
+### Do next (on the Mac — this is the critical path)
+
+1. `./scripts/mac-bootstrap.sh`
+2. Fill `Firefly/Secrets.swift` (Gemini + ElevenLabs)
+3. Signing → Team → Run on the Pro iPhone
+4. Left/right chair check; fix swap in `DepthZoneAnalyzer` if needed
+5. Generate phrase clips with ElevenLabs
+6. Build the obstacle course; tune; Wi‑Fi-off rehearsal
+7. Record 15s backup video; full demo rehearsals
+8. Paste `DEVPOST.md` into Devpost and submit
+
+### Cut if time is tight
+- Azure Function deploy
+- Azure Speech keys (Apple STT already works)
+- Live voice-question beat in the demo

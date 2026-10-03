@@ -1,5 +1,6 @@
 import ARKit
 import CoreImage
+import ImageIO
 
 /// A camera frame frozen at the moment a Gemini request is sent, so the reply can be placed in the world
 /// even though the wearer has moved by the time it arrives.
