@@ -11,8 +11,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         case idle, listening, thinking, guiding, danger, happy
     }
 
-    @Published private(set) var distances = SIMD3<Float>(repeating: 5)
-    @Published private(set) var alert: ObstacleAlert?
+    private(set) var distances = SIMD3<Float>(repeating: 5)
+    private(set) var alert: ObstacleAlert?
+    /// Published only when it flips, unlike `alert`, which changes every frame.
+    @Published private(set) var obstacleNear = false
     @Published private(set) var pulseCount = 0
     @Published private(set) var caption = ""
     @Published private(set) var status = "Starting"
@@ -41,7 +43,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let announceDistance: Float = 2.0
     private let arrivalDistance: Float = 1.2
     private let sceneInterval: TimeInterval = 4
-    private let previewInterval: TimeInterval = 0.12
+    private nonisolated static let previewInterval: TimeInterval = 0.12
+    private let frameQueue = DispatchQueue(label: "firefly.frames", qos: .userInteractive)
+    /// Only touched on frameQueue.
+    private nonisolated(unsafe) var lastPreviewTime = Date.distantPast
 
     private var history: [SIMD3<Float>] = []
     private var beacon: Beacon?
@@ -57,8 +62,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var sceneRequestActive = false
     private var lastHazard = ""
     private var lastHazardTime = Date.distantPast
-    private var lastPreview = Date.distantPast
     private var lastMapPrompt = ""
+    private var lastBeaconSide = ""
+    private var lastBeaconLine = Date.distantPast
+    private var lastAnnouncedDistance: Float = .infinity
     private var flipWarned = false
     private var onboardingStep = 0
     private var draft = UserProfile(
@@ -71,6 +78,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var handlingUtterance = false
     private var askedExitFirst = false
     private var speechWatchTask: Task<Void, Never>?
+    /// Firefly just asked a question; its answer doesn't need the "Firefly" prefix until this time.
+    private var replyDeadline = Date.distantPast
+    private var lastSpokeQuestion = false
+    private let replyWindow: TimeInterval = 8
 
     override init() {
         super.init()
@@ -100,6 +111,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let configuration = ARWorldTrackingConfiguration()
         configuration.frameSemantics = .sceneDepth
         session.delegate = self
+        session.delegateQueue = frameQueue
         session.run(configuration)
         status = "Scanning"
         startFlipMonitor()
@@ -111,28 +123,41 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// Called when the app moves between foreground and background. In the background iOS refuses
+    /// the audio session, and the listener kept retrying it.
+    func setForeground(_ foreground: Bool) {
+        if foreground {
+            listener.start()
+        } else {
+            listener.stop()
+            speaker.stop()
+        }
+    }
+
     // MARK: - ARKit
 
+    /// Runs on frameQueue. Everything that needs the frame happens here, so ARKit gets each frame back
+    /// immediately; only small values cross to the main actor. (Doing this on the main queue let frames
+    /// pile up behind UI work and ARKit warned it would stop delivering camera images.)
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard let depth = frame.sceneDepth else { return }
         let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
         let camera = frame.camera.transform
-        MainActor.assumeIsolated {
-            ingest(reading.distances, camera: camera)
-            updatePreview(from: frame, points: reading.points)
+        var preview: DebugPreview?
+        let now = Date()
+        if now.timeIntervalSince(lastPreviewTime) >= Self.previewInterval {
+            lastPreviewTime = now
+            preview = DebugPreview(frame: frame, points: reading.points)
+        }
+        Task { @MainActor in
+            self.ingest(reading.distances, camera: camera)
+            if let preview { self.preview = preview }
         }
     }
 
     nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
         let message = error.localizedDescription
         Task { @MainActor in self.status = message }
-    }
-
-    private func updatePreview(from frame: ARFrame, points: [SIMD2<Float>?]) {
-        let now = Date()
-        guard now.timeIntervalSince(lastPreview) >= previewInterval else { return }
-        lastPreview = now
-        preview = DebugPreview(frame: frame, points: points)
     }
 
     // MARK: - Safety loop
@@ -143,6 +168,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         if history.count > smoothingFrames { history.removeFirst() }
         distances = history.reduce(SIMD3<Float>(repeating: 0), +) / Float(history.count)
         alert = AlertPolicy.alert(for: distances)
+        if (alert != nil) != obstacleNear { obstacleNear = alert != nil }
 
         let now = Date()
         let inDanger = (alert?.distance ?? .infinity) < dangerDistance
@@ -185,6 +211,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         guard let alert else {
             lastAnnouncedZone = nil
+            lastAnnouncedDistance = .infinity
             if wasClose, !quietMode, now.timeIntervalSince(lastVoice) > 2 {
                 say("Clear path", allowNetwork: false)
             }
@@ -208,18 +235,22 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         guard !quietMode else { return }
         let geminiSpokeRecently = now.timeIntervalSince(lastHazardTime) < 6
-        let isNewZone = alert.zone != lastAnnouncedZone || now.timeIntervalSince(lastAnnouncement) > 5
-        if alert.distance < announceDistance, isNewZone, !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 2.5 {
+        let isNewZone = alert.zone != lastAnnouncedZone
+        let muchCloser = alert.distance < lastAnnouncedDistance - 0.6
+        let isStale = now.timeIntervalSince(lastAnnouncement) > 10
+        if alert.distance < announceDistance, isNewZone || muchCloser || isStale,
+           !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 3 {
             let direction = directionWord(alert.zone)
             let line: String
             if profile?.verbosity == .brief {
                 line = "Obstacle \(direction)"
             } else {
-                let detail = profile?.formatDistance(alert.distance) ?? String(format: "%.1f meters", alert.distance)
+                let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
                 line = "Obstacle \(direction), \(detail)"
             }
             if say(line, allowNetwork: false) {
                 lastAnnouncedZone = alert.zone
+                lastAnnouncedDistance = alert.distance
                 lastAnnouncement = now
             }
         }
@@ -248,13 +279,18 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         } else if !inDanger, !quietMode, now.timeIntervalSince(lastChime) >= guidance.interval {
             lastChime = now
             tones.chime(pan: 0)
-            if now.timeIntervalSince(lastVoice) > 4 {
-                let side: String
-                if guidance.pan < -0.35 { side = "a bit left" }
-                else if guidance.pan > 0.35 { side = "a bit right" }
-                else { side = "straight ahead" }
-                let detail = profile?.formatDistance(guidance.distance) ?? String(format: "%.1f meters", guidance.distance)
-                _ = say("Exit \(side), \(detail)", allowNetwork: false)
+            let side: String
+            if guidance.pan < -0.35 { side = "a bit left" }
+            else if guidance.pan > 0.35 { side = "a bit right" }
+            else { side = "straight ahead" }
+            let sideChanged = side != lastBeaconSide
+            if now.timeIntervalSince(lastVoice) > 3, sideChanged || now.timeIntervalSince(lastBeaconLine) > 10 {
+                let name = beacon.name.prefix(1).uppercased() + beacon.name.dropFirst()
+                let detail = profile?.formatDistance(guidance.distance) ?? UserProfile.defaultDistance(guidance.distance)
+                if say("\(name) \(side), \(detail)", allowNetwork: false) {
+                    lastBeaconSide = side
+                    lastBeaconLine = now
+                }
             }
         }
     }
@@ -286,6 +322,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func setBeacon(_ newBeacon: Beacon) {
         beacon = newBeacon
+        lastBeaconSide = ""
         beaconName = newBeacon.name
         guideMode = .navigate
         mood = .guiding
@@ -322,8 +359,14 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        guard let command = Self.stripFireflyPrefix(trimmed) else { return }
-        Task { await handleCommand(command) }
+        if let command = Self.stripFireflyPrefix(trimmed) {
+            replyDeadline = .distantPast
+            Task { await handleCommand(command) }
+        } else if Date() < replyDeadline {
+            // Answering Firefly's own question ("Where do you want to go?" / "Anything else?").
+            replyDeadline = .distantPast
+            Task { await handleCommand(trimmed) }
+        }
     }
 
     private static func stripFireflyPrefix(_ text: String) -> String? {
@@ -333,7 +376,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return text.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         // Exact wake only
-        if lowered == "firefly" { return "" }
+        if lowered == "firefly" || lowered == "hey firefly" { return "" }
         return nil
     }
 
@@ -353,10 +396,15 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         case 1:
             draft.verbosity = lowered.contains("brief") || lowered.contains("short") ? .brief : .normal
             onboardingStep = 2
-            say("Got it. Should I lead with steps, or with distance in feet and meters?", interrupt: true)
+            say("Got it. Should I lead with steps, or with distance in feet?", interrupt: true)
         case 2:
-            draft.units = (lowered.contains("distance") || lowered.contains("feet") || lowered.contains("meter"))
-                ? .distanceFirst : .stepsFirst
+            if lowered.contains("meter") || lowered.contains("metric") {
+                draft.units = .metersFirst
+            } else if lowered.contains("distance") || lowered.contains("feet") || lowered.contains("foot") {
+                draft.units = .distanceFirst
+            } else {
+                draft.units = .stepsFirst
+            }
             onboardingStep = 3
             say("Okay. Careful walking pace, or normal?", interrupt: true)
         case 3:
@@ -650,7 +698,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         if profile?.verbosity == .brief {
             hazard = "\(name) \(direction)"
         } else {
-            let detail = profile?.formatDistance(alert.distance) ?? String(format: "%.1f meters", alert.distance)
+            let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
             hazard = "\(name) \(direction), \(detail)"
         }
         let now = Date()
@@ -658,6 +706,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         if say(hazard) {
             lastHazard = hazard
             lastHazardTime = now
+            lastAnnouncedZone = alert.zone
+            lastAnnouncedDistance = alert.distance
+            lastAnnouncement = now
         }
     }
 
@@ -691,6 +742,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         // Quiet mode mutes safety callouts (handled in speakWarnings). Replies to "Firefly, …" still speak.
         guard speaker.say(text, pan: 0, interrupt: interrupt, allowNetwork: allowNetwork) else { return false }
         caption = text
+        lastSpokeQuestion = text.hasSuffix("?")
+        replyDeadline = .distantPast
         lastVoice = Date()
         isSpeaking = true
         listener.setPaused(true)
@@ -713,6 +766,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             self.isSpeaking = false
+            if self.lastSpokeQuestion, self.phase == .ready {
+                self.replyDeadline = Date().addingTimeInterval(self.replyWindow)
+            }
             if !self.handlingUtterance {
                 self.listener.setPaused(false)
             }

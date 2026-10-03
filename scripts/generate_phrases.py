@@ -16,8 +16,17 @@ from pathlib import Path
 OBJECTS = [
     "Obstacle", "Chair", "Table", "Desk", "Couch", "Person", "Wall",
     "Door", "Doorway", "Backpack", "Bag", "Stairs", "Trash can",
+    "Wet floor sign", "Curb", "Open door",
 ]
-DIRECTIONS = ["left", "ahead", "right"]
+# Must match FireflyEngine.directionWord.
+DIRECTIONS = ["on your left", "ahead", "on your right"]
+# Door/exit beacon lines: "<Target> <side>". Targets match FireflyEngine.indoorTarget.
+BEACON_TARGETS = ["Exit", "Door", "Doorway", "Stairs"]
+BEACON_SIDES = ["a bit left", "a bit right", "straight ahead"]
+# Distance parts from UserProfile.formatDistance. Callouts start at about 2 m and the beacon
+# rarely speaks beyond about 10 m, so these ranges cover nearly every line.
+MAX_STEPS = 15
+MAX_FEET = 35
 EXTRAS = [
     "Stop",
     "Clear path",
@@ -74,7 +83,16 @@ def main() -> None:
     if not api_key or not voice_id:
         sys.exit("Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID first.")
 
-    phrases = [f"{obj}, {direction}" for obj in OBJECTS for direction in DIRECTIONS] + EXTRAS
+    # Lines like "Chair on your left, about 3 steps, maybe 7 feet" are played as one clip per
+    # comma-separated part (see Speaker.clipURLs), so each part is generated on its own.
+    phrases = [f"{obj} {direction}" for obj in OBJECTS for direction in DIRECTIONS]
+    phrases += [f"{target} {side}" for target in BEACON_TARGETS for side in BEACON_SIDES]
+    for n in range(1, MAX_STEPS + 1):
+        unit = "step" if n == 1 else "steps"
+        phrases += [f"about {n} {unit}", f"roughly {n} {unit}"]
+    for n in range(1, MAX_FEET + 1):
+        phrases += [f"about {n} feet", f"maybe {n} feet"]
+    phrases += EXTRAS
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for phrase in phrases:
         path = OUTPUT_DIR / f"{slug(phrase)}.mp3"

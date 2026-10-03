@@ -29,16 +29,21 @@ enum TTSClient {
 }
 
 @MainActor
-final class Speaker {
+final class Speaker: NSObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
     private let synthesizer = AVSpeechSynthesizer()
     private var requestID = 0
+    /// Clips still to play after the current one, for lines stitched from several bundled clips.
+    private var queuedClips: [URL] = []
+    private var queuedPan: Float = 0
 
     var isSpeaking: Bool {
-        player?.isPlaying == true || synthesizer.isSpeaking
+        player?.isPlaying == true || synthesizer.isSpeaking || !queuedClips.isEmpty
     }
 
-    /// Plays a bundled clip if one matches the text, otherwise ElevenLabs live, otherwise the system voice.
+    /// Plays a bundled clip if one matches the text, then a run of bundled clips if every comma-separated
+    /// part has one ("Chair on your left, about 3 steps, maybe 7 feet"), otherwise ElevenLabs live,
+    /// otherwise the system voice.
     /// Returns false if it stayed quiet because something else was already being said.
     @discardableResult
     func say(_ text: String, pan: Float = 0, interrupt: Bool = false, allowNetwork: Bool = true) -> Bool {
@@ -50,6 +55,11 @@ final class Speaker {
         let id = requestID
 
         if let url = Speaker.clipURL(for: text), start(try? AVAudioPlayer(contentsOf: url), pan: pan) {
+            return true
+        }
+        if let urls = Speaker.clipURLs(forParts: text), start(try? AVAudioPlayer(contentsOf: urls[0]), pan: pan) {
+            queuedClips = Array(urls.dropFirst())
+            queuedPan = pan
             return true
         }
         guard allowNetwork else {
@@ -67,6 +77,7 @@ final class Speaker {
 
     func stop() {
         requestID += 1
+        queuedClips = []
         player?.stop()
         synthesizer.stopSpeaking(at: .immediate)
     }
@@ -74,8 +85,17 @@ final class Speaker {
     private func start(_ newPlayer: AVAudioPlayer?, pan: Float) -> Bool {
         guard let newPlayer else { return false }
         newPlayer.pan = pan
+        newPlayer.delegate = self
         player = newPlayer
         return newPlayer.play()
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ finished: AVAudioPlayer, successfully flag: Bool) {
+        MainActor.assumeIsolated {
+            guard finished === player, !queuedClips.isEmpty else { return }
+            let next = queuedClips.removeFirst()
+            if !start(try? AVAudioPlayer(contentsOf: next), pan: queuedPan) { queuedClips = [] }
+        }
     }
 
     /// Must match slug() in scripts/generate_phrases.py.
@@ -84,6 +104,13 @@ final class Speaker {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: "_")
+    }
+
+    private static func clipURLs(forParts text: String) -> [URL]? {
+        let parts = text.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard parts.count > 1 else { return nil }
+        let urls = parts.compactMap(clipURL(for:))
+        return urls.count == parts.count ? urls : nil
     }
 
     private static func clipURL(for text: String) -> URL? {

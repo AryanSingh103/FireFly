@@ -4,13 +4,14 @@ import UIKit
 
 struct ContentView: View {
     @StateObject private var engine = FireflyEngine()
+    @Environment(\.scenePhase) private var scenePhase
 
     private let glow = Color(red: 0.85, green: 1.0, blue: 0.4)
 
     var body: some View {
         ZStack {
             // Full-bleed camera + red near-depth wash (no grids).
-            CameraStage(preview: engine.preview, alert: engine.alert)
+            CameraStage(preview: engine.preview, obstacleNear: engine.obstacleNear)
                 .ignoresSafeArea()
 
             // Corner minimap pie
@@ -49,6 +50,9 @@ struct ContentView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             engine.start()
         }
+        .onChange(of: scenePhase) { phase in
+            engine.setForeground(phase == .active)
+        }
     }
 
     private var statusLine: String {
@@ -76,7 +80,7 @@ struct ContentView: View {
 
 struct CameraStage: View {
     let preview: DebugPreview?
-    let alert: ObstacleAlert?
+    let obstacleNear: Bool
 
     var body: some View {
         GeometryReader { geo in
@@ -95,7 +99,7 @@ struct CameraStage: View {
                         .scaledToFill()
                         .frame(width: geo.size.width, height: geo.size.height)
                         .clipped()
-                        .opacity(alert == nil ? 0.25 : 0.55)
+                        .opacity(obstacleNear ? 0.55 : 0.25)
                         .blendMode(.screen)
                 } else {
                     ProgressView()
@@ -191,6 +195,11 @@ struct MinimapRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        // SwiftUI calls this on every parent redraw; re-centring the map each time is expensive.
+        let coordinate = maps.userCoordinate
+        let state = "\(maps.route.map { ObjectIdentifier($0).hashValue } ?? 0)|\(coordinate?.latitude ?? 0)|\(coordinate?.longitude ?? 0)"
+        guard state != context.coordinator.lastState else { return }
+        context.coordinator.lastState = state
         map.removeOverlays(map.overlays)
         if let route = maps.route {
             map.addOverlay(route.polyline)
@@ -206,6 +215,7 @@ struct MinimapRepresentable: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var lastState = ""
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
