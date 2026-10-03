@@ -1,3 +1,4 @@
+import ARKit
 import MapKit
 import SwiftUI
 import UIKit
@@ -11,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             // Full-bleed camera + red near-depth wash (no grids).
-            CameraStage(preview: engine.preview, obstacleNear: engine.obstacleNear)
+            CameraStage(session: engine.session, preview: engine.preview, obstacleNear: engine.obstacleNear)
                 .ignoresSafeArea()
 
             // Corner minimap pie
@@ -29,7 +30,7 @@ struct ContentView: View {
             // Firefly orb + captions
             VStack {
                 Spacer()
-                FireflyOrb(mood: engine.mood, pulseCount: engine.pulseCount, isSpeaking: engine.isSpeaking, glow: glow)
+                FireflyOrb(mood: engine.mood, isSpeaking: engine.isSpeaking, glow: glow)
                     .padding(.bottom, 8)
 
                 Text(engine.caption)
@@ -78,7 +79,10 @@ struct ContentView: View {
 
 // MARK: - Camera
 
+/// Live camera straight from the ARKit session (rendered on the GPU at full frame rate), with the
+/// LiDAR heat map on top. The heat map updates a few times a second; the camera never waits for it.
 struct CameraStage: View {
+    let session: ARSession
     let preview: DebugPreview?
     let obstacleNear: Bool
 
@@ -86,12 +90,8 @@ struct CameraStage: View {
         GeometryReader { geo in
             ZStack {
                 Color.black
+                LiveCameraView(session: session)
                 if let preview {
-                    Image(decorative: preview.camera, scale: 1)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
                     // Red wash for nearby depth — no grid lines.
                     Image(decorative: preview.depth, scale: 1)
                         .resizable()
@@ -101,9 +101,6 @@ struct CameraStage: View {
                         .clipped()
                         .opacity(obstacleNear ? 0.55 : 0.25)
                         .blendMode(.screen)
-                } else {
-                    ProgressView()
-                        .tint(.white)
                 }
             }
         }
@@ -111,51 +108,133 @@ struct CameraStage: View {
     }
 }
 
-// MARK: - Orb
+struct LiveCameraView: UIViewRepresentable {
+    let session: ARSession
 
+    func makeUIView(context: Context) -> ARSCNView {
+        let view = ARSCNView(frame: .zero)
+        // Shares the engine's session; the engine stays the session's delegate.
+        view.session = session
+        view.automaticallyUpdatesLighting = false
+        view.rendersCameraGrain = false
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: ARSCNView, context: Context) {}
+}
+
+// MARK: - Firefly
+
+/// The Firefly creature: a glowing body with flapping wings, a breathing halo and drifting sparkles.
+/// Mood changes its colour, speed and how much it moves. Drawn with Canvas at up to 30 fps.
 struct FireflyOrb: View {
     let mood: FireflyEngine.Mood
-    let pulseCount: Int
     let isSpeaking: Bool
     let glow: Color
 
-    private var visible: Bool {
+    private var tint: Color {
         switch mood {
-        case .idle: return false
-        case .listening, .thinking, .guiding, .danger, .happy: return true
+        case .danger: return Color(red: 1.0, green: 0.42, blue: 0.25)
+        case .happy: return Color(red: 1.0, green: 0.9, blue: 0.45)
+        default: return glow
         }
     }
 
-    private var scale: CGFloat {
-        if mood == .danger { return pulseCount % 2 == 0 ? 1.15 : 1.45 }
-        if isSpeaking { return 1.35 }
-        return pulseCount % 2 == 0 ? 1.0 : 1.12
+    /// How lively it is: wing speed, bob and sparkle count all scale with this.
+    private var energy: Double {
+        switch mood {
+        case .idle: return 0.35
+        case .guiding: return 0.6
+        case .listening: return 0.8
+        case .thinking: return 0.7
+        case .happy: return 1.0
+        case .danger: return 1.3
+        }
     }
+
+    private var visible: Bool { mood != .idle || isSpeaking }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(glow.opacity(mood == .danger ? 1 : 0.95))
-                .frame(width: 28, height: 28)
-                .shadow(color: glow, radius: mood == .danger ? 28 : 18)
-                .scaleEffect(scale)
-            // Tiny wing hints
-            Capsule()
-                .fill(glow.opacity(0.45))
-                .frame(width: 18, height: 6)
-                .offset(x: -16, y: -2)
-                .rotationEffect(.degrees(-20))
-            Capsule()
-                .fill(glow.opacity(0.45))
-                .frame(width: 18, height: 6)
-                .offset(x: 16, y: -2)
-                .rotationEffect(.degrees(20))
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in
+                draw(in: &context, size: size, time: t)
+            }
         }
-        .opacity(visible ? 1 : 0.15)
-        .animation(.easeOut(duration: 0.15), value: pulseCount)
-        .animation(.easeInOut(duration: 0.25), value: isSpeaking)
-        .animation(.easeInOut(duration: 0.3), value: mood)
+        .frame(width: 140, height: 120)
+        .opacity(visible ? 1 : 0.45)
+        .animation(.easeInOut(duration: 0.4), value: visible)
         .accessibilityHidden(true)
+    }
+
+    private func draw(in context: inout GraphicsContext, size: CGSize, time t: Double) {
+        let color = tint
+        // Hover: a slow figure-eight, bigger when lively.
+        let drift = 6 + 8 * energy
+        let center = CGPoint(
+            x: size.width / 2 + CGFloat(sin(t * 0.9) * drift),
+            y: size.height / 2 + CGFloat(sin(t * 1.8) * drift * 0.5)
+        )
+
+        // Breathing glow; speaking makes it flicker like a voice.
+        let breath = 0.5 + 0.5 * sin(t * (mood == .danger ? 9 : 2.2))
+        let voice = isSpeaking ? 0.5 + 0.5 * sin(t * 17) * sin(t * 5.3) : 0
+        let haloRadius = CGFloat(26 + 10 * breath + 12 * voice) * (mood == .danger ? 1.25 : 1)
+
+        // Sparkles orbiting and fading.
+        let sparkleCount = Int(3 + 6 * energy)
+        for i in 0..<sparkleCount {
+            let phase = Double(i) / Double(sparkleCount) * 2 * .pi
+            let speed = 0.6 + 0.25 * Double(i % 3)
+            let angle = phase + t * speed
+            let radius = 30 + 14 * sin(t * 0.7 + phase * 2)
+            let point = CGPoint(x: center.x + CGFloat(cos(angle) * radius),
+                                y: center.y + CGFloat(sin(angle) * radius * 0.6))
+            let twinkle = 0.5 + 0.5 * sin(t * 4 + phase * 3)
+            let r = CGFloat(1.2 + 1.6 * twinkle)
+            context.fill(Path(ellipseIn: CGRect(x: point.x - r, y: point.y - r, width: 2 * r, height: 2 * r)),
+                         with: .color(color.opacity(0.35 + 0.5 * twinkle)))
+        }
+
+        // Halo.
+        context.fill(
+            Path(ellipseIn: CGRect(x: center.x - haloRadius, y: center.y - haloRadius, width: 2 * haloRadius, height: 2 * haloRadius)),
+            with: .radialGradient(
+                Gradient(colors: [color.opacity(0.55), color.opacity(0.15), .clear]),
+                center: center, startRadius: 0, endRadius: haloRadius
+            )
+        )
+
+        // Wings: translucent ellipses that flap by squashing.
+        let flapSpeed = 8 + 18 * energy
+        let flap = CGFloat(0.35 + 0.65 * abs(sin(t * flapSpeed)))
+        for side in [-1.0, 1.0] {
+            var wing = context
+            wing.translateBy(x: center.x + CGFloat(side * 7), y: center.y - 6)
+            wing.rotate(by: .degrees(side * 28))
+            wing.scaleBy(x: flap, y: 1)
+            let rect = CGRect(x: side > 0 ? 0 : -22, y: -8, width: 22, height: 13)
+            wing.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.28)))
+            wing.stroke(Path(ellipseIn: rect), with: .color(color.opacity(0.5)), lineWidth: 0.8)
+        }
+
+        // Body: a small dark head and a glowing abdomen, like a real firefly.
+        let abdomen = CGRect(x: center.x - 7, y: center.y - 2, width: 14, height: 18)
+        context.fill(Path(ellipseIn: abdomen.insetBy(dx: -4, dy: -4)), with: .color(color.opacity(0.35 + 0.3 * breath)))
+        context.fill(Path(ellipseIn: abdomen), with: .color(color))
+        context.fill(Path(ellipseIn: CGRect(x: center.x - 5, y: center.y - 11, width: 10, height: 10)),
+                     with: .color(Color(white: 0.15)))
+        // Antennae.
+        var antennae = Path()
+        let wiggle = CGFloat(sin(t * 3) * 2)
+        antennae.move(to: CGPoint(x: center.x - 2, y: center.y - 10))
+        antennae.addQuadCurve(to: CGPoint(x: center.x - 8 + wiggle, y: center.y - 20),
+                              control: CGPoint(x: center.x - 3, y: center.y - 18))
+        antennae.move(to: CGPoint(x: center.x + 2, y: center.y - 10))
+        antennae.addQuadCurve(to: CGPoint(x: center.x + 8 - wiggle, y: center.y - 20),
+                              control: CGPoint(x: center.x + 3, y: center.y - 18))
+        context.stroke(antennae, with: .color(Color(white: 0.35)), lineWidth: 1.2)
     }
 }
 

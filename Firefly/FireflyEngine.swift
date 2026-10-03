@@ -30,7 +30,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     let maps = MapNavigator()
 
-    private let session = ARSession()
+    /// Shared with the live camera view in ContentView.
+    let session = ARSession()
     private let haptics = HapticPulser()
     private let tones = TonePlayer()
     private let speaker = Speaker()
@@ -299,7 +300,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guideMode = .navigate
         mood = .thinking
         for attempt in 0..<3 {
-            guard let snapshot = captureSnapshot() else { break }
+            guard let snapshot = await captureSnapshot() else { break }
             do {
                 if let point = try await GeminiClient.locate(target, in: snapshot.jpeg) {
                     let located = snapshot.worldPoint(atPhotoPoint: point)
@@ -390,7 +391,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let lowered = text.lowercased()
         switch onboardingStep {
         case 0:
-            draft.name = text.split(separator: " ").first.map(String.init) ?? text
+            draft.name = Self.name(from: text)
             onboardingStep = 1
             say("Nice to meet you, \(draft.name). Do you want brief updates, or normal detail?", interrupt: true)
         case 1:
@@ -424,6 +425,19 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         default:
             phase = .ready
         }
+    }
+
+    /// "My name is Aryan." -> "Aryan"
+    private static func name(from text: String) -> String {
+        var rest = text.lowercased()
+        for lead in ["my name is ", "my name's ", "i'm ", "i am ", "it's ", "it is ", "call me ", "this is ", "hi ", "hey "]
+        where rest.hasPrefix(lead) {
+            rest = String(rest.dropFirst(lead.count))
+        }
+        let word = rest.split(separator: " ").first.map(String.init) ?? rest
+        let letters = word.trimmingCharacters(in: CharacterSet.letters.inverted)
+        guard !letters.isEmpty else { return text }
+        return letters.prefix(1).uppercased() + letters.dropFirst()
     }
 
     private func handleCommand(_ command: String) async {
@@ -634,7 +648,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func describeScene(prompt: String) async {
         mood = .thinking
-        guard let snapshot = captureSnapshot(),
+        guard let snapshot = await captureSnapshot(),
               let reply = try? await GeminiClient.answer(prompt, in: snapshot.jpeg),
               !reply.isEmpty
         else {
@@ -667,12 +681,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         else { return }
         let refiningName = beacon?.isApproximate == true ? beacon?.name : nil
         guard refiningName != nil || (alert != nil && !maps.isNavigating) else { return }
-        guard let snapshot = captureSnapshot() else { return }
-
         lastSceneRequest = now
         sceneRequestActive = true
         Task {
             defer { sceneRequestActive = false }
+            guard let snapshot = await captureSnapshot() else { return }
             if let refiningName {
                 guard let point = try? await GeminiClient.locate(refiningName, in: snapshot.jpeg) else { return }
                 let located = snapshot.worldPoint(atPhotoPoint: point)
@@ -733,8 +746,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Helpers
 
-    private func captureSnapshot() -> FrameSnapshot? {
-        session.currentFrame.flatMap { FrameSnapshot(frame: $0) }
+    /// JPEG encoding and copying the depth map take tens of milliseconds, so they run off the main thread.
+    private func captureSnapshot() async -> FrameSnapshot? {
+        guard let frame = session.currentFrame else { return nil }
+        return await Task.detached(priority: .userInitiated) { FrameSnapshot(frame: frame) }.value
     }
 
     @discardableResult

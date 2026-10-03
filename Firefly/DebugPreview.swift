@@ -1,32 +1,20 @@
 import ARKit
-import CoreImage
 
-/// What the obstacle detector sees, for checking it on the device: the camera image, the LiDAR depth
-/// as a heat map, and where each zone's distance was measured. Both images are upright for a phone in portrait.
+/// What the obstacle detector sees: the LiDAR depth as a heat map, upright for a phone in portrait,
+/// and where each zone's distance was measured. Drawn over the live camera view.
 struct DebugPreview {
-    let camera: CGImage
     let depth: CGImage
     let points: [SIMD2<Float>?]
 
-    private static let context = CIContext()
 
     init?(frame: ARFrame, points: [SIMD2<Float>?]) {
         guard let depthData = frame.sceneDepth,
-              let camera = DebugPreview.uprightCamera(frame.capturedImage),
               let depth = DebugPreview.heatMap(depthData)
         else { return nil }
-        self.camera = camera
         self.depth = depth
         self.points = points
     }
 
-    private static func uprightCamera(_ pixelBuffer: CVPixelBuffer) -> CGImage? {
-        // .right turns the landscape sensor image upright for a phone held in portrait.
-        let upright = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-        let scale = 480 / max(upright.extent.width, upright.extent.height)
-        let scaled = upright.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return context.createCGImage(scaled, from: scaled.extent)
-    }
 
     /// Red is near, blue is at the edge of the alert range. Pixels the detector ignores (low confidence) are left clear.
     private static func heatMap(_ depthData: ARDepthData) -> CGImage? {
