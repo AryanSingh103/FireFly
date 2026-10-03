@@ -18,6 +18,10 @@ struct PlaceHit: Identifiable, Equatable {
         return String(format: "%@, about %.1f miles away", name, miles)
     }
 
+    var addressLine: String {
+        locality.isEmpty ? name : "\(name) at \(locality)"
+    }
+
     static func == (lhs: PlaceHit, rhs: PlaceHit) -> Bool {
         lhs.id == rhs.id
     }
@@ -26,6 +30,7 @@ struct PlaceHit: Identifiable, Equatable {
 @MainActor
 final class MapNavigator: NSObject, ObservableObject {
     @Published private(set) var userCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var userHeading: CLLocationDirection?
     @Published private(set) var route: MKRoute?
     @Published private(set) var destinationName: String?
     @Published private(set) var nextInstruction: String?
@@ -33,15 +38,25 @@ final class MapNavigator: NSObject, ObservableObject {
 
     private let locationManager = CLLocationManager()
     private var pendingConfirm: PlaceHit?
+    private var pendingChoices: [PlaceHit] = []
     private var destinationCoordinate: CLLocationCoordinate2D?
     private var lastReroute = Date.distantPast
-    private var lastStepIndex = -1
+    private var lastSpokenStep = -1
+    private var routeStartedAt: Date?
+    private var currentStepIndex = 0
+
+    /// BlindSpot: freeze obstacle voice during the opening nav summary.
+    var isInInitialNavPhase: Bool {
+        guard let routeStartedAt else { return false }
+        return Date().timeIntervalSince(routeStartedAt) < BlindSpotNav.routeStartGraceSeconds
+    }
 
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 3
+        locationManager.headingFilter = 8
     }
 
     func requestPermission() {
@@ -60,11 +75,11 @@ final class MapNavigator: NSObject, ObservableObject {
         do {
             let response = try await MKLocalSearch(request: request).start()
             let origin = userCoordinate.map { CLLocation(latitude: $0.latitude, longitude: $0.longitude) }
-            return response.mapItems.prefix(5).enumerated().map { index, item in
+            return response.mapItems.prefix(3).enumerated().map { index, item in
                 let coord = item.placemark.coordinate
                 let distance = origin?.distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude)) ?? 0
                 let name = item.name ?? query
-                let locality = [item.placemark.locality, item.placemark.title].compactMap { $0 }.first ?? ""
+                let locality = item.placemark.title ?? item.placemark.locality ?? ""
                 return PlaceHit(
                     id: "\(index)-\(name)-\(coord.latitude)",
                     name: name,
@@ -78,8 +93,33 @@ final class MapNavigator: NSObject, ObservableObject {
         }
     }
 
+    /// BlindSpot flow: hold up to 3 choices so the user can pick by number/name.
+    func holdChoices(_ places: [PlaceHit]) {
+        pendingChoices = Array(places.prefix(3))
+        pendingConfirm = pendingChoices.first
+    }
+
+    var choices: [PlaceHit] { pendingChoices }
+
+    func pickChoice(matching answer: String) -> PlaceHit? {
+        let lowered = answer.lowercased()
+        if lowered.contains("1") || lowered.contains("first") || lowered.contains("one") {
+            return pendingChoices.first
+        }
+        if pendingChoices.count > 1, lowered.contains("2") || lowered.contains("second") {
+            return pendingChoices[1]
+        }
+        if pendingChoices.count > 2, lowered.contains("3") || lowered.contains("third") {
+            return pendingChoices[2]
+        }
+        return pendingChoices.first { place in
+            lowered.contains(place.name.lowercased()) || place.name.lowercased().contains(lowered)
+        }
+    }
+
     func holdForConfirm(_ place: PlaceHit) {
         pendingConfirm = place
+        pendingChoices = [place]
     }
 
     var pendingPlace: PlaceHit? { pendingConfirm }
@@ -91,13 +131,14 @@ final class MapNavigator: NSObject, ObservableObject {
 
     func startRoute(to place: PlaceHit) async -> String? {
         guard let userCoordinate else {
-            return "I don't have your location yet. Try again in a moment."
+            return "I don't have your location yet. Make sure the app is open and GPS is on, then ask again."
         }
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: userCoordinate))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: place.coordinate))
         request.destination?.name = place.name
         request.transportType = .walking
+        request.requestsAlternateRoutes = false
 
         do {
             let response = try await MKDirections(request: request).calculate()
@@ -109,10 +150,29 @@ final class MapNavigator: NSObject, ObservableObject {
             self.destinationCoordinate = place.coordinate
             self.isNavigating = true
             self.pendingConfirm = nil
-            self.lastStepIndex = -1
-            publishStep()
+            self.pendingChoices = []
+            self.currentStepIndex = 0
+            self.lastSpokenStep = -1
+            self.routeStartedAt = Date()
+            self.nextInstruction = nil
+
             let miles = route.distance / 1609.34
-            return String(format: "Starting navigation to %@. About %.1f miles on foot. %@", place.name, miles, nextInstruction ?? "Follow the path.")
+            let minutes = max(1, Int(route.expectedTravelTime / 60))
+            let arrival = Date().addingTimeInterval(route.expectedTravelTime)
+            let arrivalText = Self.timeFormatter.string(from: arrival)
+            let firstRaw = route.steps.first(where: { !$0.instructions.isEmpty })?.instructions ?? "Follow the path"
+            let toward = stepEndCoordinate(route.steps.first) ?? place.coordinate
+            let first = BlindSpotNav.rewriteInstruction(
+                firstRaw,
+                userHeading: userHeading,
+                from: userCoordinate,
+                toward: toward
+            )
+            // BlindSpot announcement order: destination → distance → time → arrival → first direction.
+            return String(
+                format: "Destination: %@. Total distance: about %.1f miles. Estimated time: %d minutes. Arrival around %@. First direction: %@.",
+                place.name, miles, minutes, arrivalText, first
+            )
         } catch {
             return "Sorry, there's no connection for maps right now. I can stay in Passive and watch for obstacles."
         }
@@ -125,54 +185,101 @@ final class MapNavigator: NSObject, ObservableObject {
         destinationCoordinate = nil
         nextInstruction = nil
         pendingConfirm = nil
-        lastStepIndex = -1
+        pendingChoices = []
+        routeStartedAt = nil
+        currentStepIndex = 0
+        lastSpokenStep = -1
     }
 
-    /// Call when LiDAR reports close danger — freeze spoken map steps until clear.
     private(set) var pausedForObstacle = false
 
     func setPausedForObstacle(_ paused: Bool) {
         pausedForObstacle = paused
     }
 
+    func whereAmI() -> String {
+        guard let userCoordinate else {
+            return "Location not available yet. Make sure the app is open and GPS is on."
+        }
+        var facing = ""
+        if let userHeading {
+            facing = " \(BlindSpotNav.facingPhrase(heading: userHeading))"
+        }
+        return String(format: "You are near %.5f, %.5f.%@", userCoordinate.latitude, userCoordinate.longitude, facing)
+    }
+
+    func facing() -> String {
+        guard let userHeading else {
+            return "Compass heading is not available yet."
+        }
+        return "You are \(BlindSpotNav.facingPhrase(heading: userHeading).lowercased())"
+    }
+
     func tick() {
         guard isNavigating, !pausedForObstacle else { return }
+        if isInInitialNavPhase { return }
         publishStep()
         maybeReroute()
     }
 
+    /// BlindSpot-style: warn at ~45 m, say "Now" at ~12 m, then advance.
     private func publishStep() {
         guard let route, let userCoordinate else { return }
-        let user = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
-        var bestIndex = 0
-        var bestDistance = Double.greatestFiniteMagnitude
-        for (index, step) in route.steps.enumerated() {
-            let points = step.polyline
-            var coords = Array(repeating: kCLLocationCoordinate2DInvalid, count: points.pointCount)
-            points.getCoordinates(&coords, range: NSRange(location: 0, length: points.pointCount))
-            for coord in coords where CLLocationCoordinate2DIsValid(coord) {
-                let distance = user.distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude))
-                if distance < bestDistance {
-                    bestDistance = distance
-                    bestIndex = index
-                }
+        let steps = route.steps.filter { !$0.instructions.isEmpty || $0.distance > 0 }
+        guard !steps.isEmpty else { return }
+        if currentStepIndex >= steps.count {
+            nextInstruction = "You have arrived at your destination: \(destinationName ?? "your destination")"
+            return
+        }
+
+        let step = steps[currentStepIndex]
+        guard let end = stepEndCoordinate(step) else { return }
+        let dist = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
+            .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+
+        let nextIndex = currentStepIndex + 1
+        if nextIndex >= steps.count {
+            if lastSpokenStep < currentStepIndex, dist < BlindSpotNav.turnNowMeters {
+                lastSpokenStep = currentStepIndex
+                nextInstruction = "You have arrived at your destination: \(destinationName ?? "your destination")"
             }
+            return
         }
-        if bestIndex != lastStepIndex, bestIndex < route.steps.count {
-            lastStepIndex = bestIndex
-            let raw = route.steps[bestIndex].instructions
-            nextInstruction = Self.rewrite(raw)
-        }
-        if bestDistance < 18, bestIndex >= route.steps.count - 1 {
-            nextInstruction = "You're at \(destinationName ?? "your destination")."
+
+        let next = steps[nextIndex]
+        let toward = stepEndCoordinate(next) ?? end
+        let rewritten = BlindSpotNav.rewriteInstruction(
+            next.instructions.isEmpty ? "Continue" : next.instructions,
+            userHeading: userHeading,
+            from: userCoordinate,
+            toward: toward
+        )
+
+        if dist < BlindSpotNav.turnNowMeters {
+            if lastSpokenStep <= nextIndex {
+                lastSpokenStep = nextIndex
+                currentStepIndex = nextIndex
+                nextInstruction = "\(rewritten) Now."
+            }
+        } else if dist < BlindSpotNav.turnAnnounceMeters {
+            if lastSpokenStep < nextIndex {
+                lastSpokenStep = nextIndex
+                nextInstruction = "In \(Int(dist)) meters, \(rewritten)"
+            }
         }
     }
 
+    private func stepEndCoordinate(_ step: MKRoute.Step?) -> CLLocationCoordinate2D? {
+        guard let step, step.polyline.pointCount > 0 else { return nil }
+        var coords = Array(repeating: kCLLocationCoordinate2DInvalid, count: step.polyline.pointCount)
+        step.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: step.polyline.pointCount))
+        return coords.last(where: CLLocationCoordinate2DIsValid)
+    }
+
     private func maybeReroute() {
-        guard isNavigating, let destinationName, let destinationCoordinate, let userCoordinate else { return }
+        guard isNavigating, let destinationName, let destinationCoordinate, let userCoordinate, let route else { return }
         let now = Date()
         guard now.timeIntervalSince(lastReroute) > 20 else { return }
-        guard let route else { return }
         let user = CLLocation(latitude: userCoordinate.latitude, longitude: userCoordinate.longitude)
         var nearest = Double.greatestFiniteMagnitude
         for step in route.steps {
@@ -194,23 +301,11 @@ final class MapNavigator: NSObject, ObservableObject {
         Task { _ = await startRoute(to: place) }
     }
 
-    /// Turn MapKit prose into short Firefly guidance.
-    static func rewrite(_ instruction: String) -> String {
-        var text = instruction
-        let replacements = [
-            "Proceed to the route": "Keep going",
-            "Continue straight": "Keep straight",
-            "Turn left": "Turn left",
-            "Turn right": "Turn right",
-        ]
-        for (from, to) in replacements {
-            text = text.replacingOccurrences(of: from, with: to)
-        }
-        if text.count > 90 {
-            text = String(text.prefix(87)) + "…"
-        }
-        return text
-    }
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
 }
 
 extension MapNavigator: CLLocationManagerDelegate {
@@ -222,10 +317,19 @@ extension MapNavigator: CLLocationManagerDelegate {
         }
     }
 
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
+        guard heading >= 0 else { return }
+        Task { @MainActor in
+            self.userHeading = heading
+        }
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             if manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways {
                 self.locationManager.startUpdatingLocation()
+                self.locationManager.startUpdatingHeading()
             }
         }
     }

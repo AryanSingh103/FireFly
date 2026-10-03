@@ -8,8 +8,8 @@ enum GeminiClient {
         let prompt = """
         This photo is from a chest-worn phone helping a blind walker. \
         Name only the single nearest hazard in their path as "<Object>, <left|ahead|right>", \
-        for example "Chair, left". Prefer: Chair, Table, Desk, Couch, Person, Wall, Door, Doorway, \
-        Backpack, Bag, Stairs, Trash can, Wet floor sign, Curb, Open door. \
+        for example "Chair, left". Prefer: person, bicycle, car, bus, truck, chair, couch, backpack, \
+        suitcase, bench, stop sign, traffic light, dog, table, stairs, door, doorway, wet floor sign, curb. \
         If the path is clear, reply "none".
         """
         return try await generate(prompt: prompt, jpeg: jpeg, json: false)

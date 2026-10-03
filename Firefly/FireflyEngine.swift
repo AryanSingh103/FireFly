@@ -176,7 +176,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         let now = Date()
         let inDanger = (alert?.distance ?? .infinity) < dangerDistance
-        maps.setPausedForObstacle(inDanger && maps.isNavigating)
+        maps.setPausedForObstacle((inDanger && maps.isNavigating) || maps.isInInitialNavPhase)
 
         if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
             lastPulse = now
@@ -212,6 +212,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private func speakWarnings(now: Date) {
         guard phase != .onboarding else { return }
         guard !handlingUtterance else { return }
+        // BlindSpot: don't let obstacle callouts talk over the opening nav summary.
+        if maps.isInInitialNavPhase { return }
 
         guard let alert else {
             lastAnnouncedZone = nil
@@ -247,10 +249,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             let direction = directionWord(alert.zone)
             let line: String
             if profile?.verbosity == .brief {
-                line = "Obstacle \(direction)"
+                line = BlindSpotNav.obstaclePhrase(description: direction)
             } else {
                 let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-                line = "Obstacle \(direction), \(detail)"
+                line = BlindSpotNav.obstaclePhrase(description: "\(direction), \(detail)")
             }
             if say(line, allowNetwork: false) {
                 lastAnnouncedZone = alert.zone
@@ -513,16 +515,26 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
+        if lowered.contains("where am i") || lowered.contains("what's my location") || lowered.contains("what is my location") {
+            say(maps.whereAmI(), interrupt: true)
+            return
+        }
+        if lowered.contains("which way") || lowered.contains("am i facing") || lowered.contains("facing") {
+            say(maps.facing(), interrupt: true)
+            return
+        }
+
         if lowered.contains("what's in front") || lowered.contains("what is in front")
-            || lowered.contains("describe") || lowered.contains("around me") || lowered.contains("see") {
+            || lowered.contains("describe") || lowered.contains("around me") {
             await describeScene(prompt: command)
             return
         }
 
-        // Outdoor / place search
+        // BlindSpot: "nearest coffee" picks one; vague "a coffee shop" lists options.
         if looksLikePlaceRequest(lowered) {
             let query = Self.placeQuery(from: lowered) ?? command
-            await searchAndOffer(query)
+            let nearestOnly = lowered.contains("nearest") || lowered.contains("closest")
+            await searchAndOffer(query, autoPickNearest: nearestOnly)
             return
         }
 
@@ -561,17 +573,32 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         return nil
     }
 
-    private func searchAndOffer(_ query: String) async {
+    private func searchAndOffer(_ query: String, autoPickNearest: Bool = false) async {
         mood = .thinking
         let hits = await maps.search(query)
-        guard let first = hits.first else {
+        guard !hits.isEmpty else {
             say("Sorry, there's no connection right now, but I can stay in Passive and watch for obstacles.", interrupt: true)
             guideMode = .passive
             return
         }
-        maps.holdForConfirm(first)
+        if autoPickNearest, let first = hits.first {
+            maps.holdForConfirm(first)
+            if let spoken = await maps.startPendingRoute() {
+                guideMode = .navigate
+                mood = .guiding
+                phase = .ready
+                say(spoken, interrupt: true)
+            }
+            return
+        }
+        // BlindSpot: list up to 3, ask which one.
+        maps.holdChoices(hits)
         phase = .awaitingNavConfirm
-        say("I found \(first.spokenSummary). Start nav?", interrupt: true)
+        var lines: [String] = []
+        for (index, hit) in hits.prefix(3).enumerated() {
+            lines.append("\(index + 1). \(hit.addressLine)")
+        }
+        say("I found \(hits.count) places: \(lines.joined(separator: ". ")). Which one? Say the number or name.", interrupt: true)
     }
 
     private func handleNavConfirm(_ text: String) async {
@@ -607,7 +634,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        if answer.hasPrefix("y") || answer.contains("start") || answer.contains("yes") || answer.contains("go") {
+        if answer.hasPrefix("y") || answer.contains("start") || answer.contains("yes") || answer.contains("go")
+            || maps.pickChoice(matching: answer) != nil {
+            if let picked = maps.pickChoice(matching: answer) {
+                maps.holdForConfirm(picked)
+            }
             // If clearly indoors and destination is far, ask about exit first once.
             if !askedExitFirst, let place = maps.pendingPlace, place.distanceMeters > 80, alert != nil {
                 askedExitFirst = true
@@ -636,7 +667,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        say("Say yes to start nav, or no to cancel.", interrupt: true)
+        say("Say one, two, or three — or yes to start, no to cancel.", interrupt: true)
     }
 
     private func cancelGuidance() {
@@ -712,10 +743,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let name = "\(object.prefix(1).uppercased())\(object.dropFirst().lowercased())"
         let hazard: String
         if profile?.verbosity == .brief {
-            hazard = "\(name) \(direction)"
+            hazard = BlindSpotNav.obstaclePhrase(description: "\(name) \(direction)")
         } else {
             let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-            hazard = "\(name) \(direction), \(detail)"
+            hazard = BlindSpotNav.obstaclePhrase(description: "\(name) \(direction), \(detail)")
         }
         let now = Date()
         if hazard == lastHazard, now.timeIntervalSince(lastHazardTime) < 10 { return }

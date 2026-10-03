@@ -25,6 +25,7 @@
 		A10000000000000000000013 /* UserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* UserProfile.swift */; };
 		A10000000000000000000014 /* AlwaysListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* AlwaysListener.swift */; };
 		A10000000000000000000015 /* MapNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* MapNavigator.swift */; };
+		A10000000000000000000016 /* BlindSpotNav.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* BlindSpotNav.swift */; };
 		A1000000000000000000000F /* Phrases in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* Phrases */; };
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -48,6 +49,7 @@
 		B10000000000000000000013 /* UserProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfile.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* AlwaysListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlwaysListener.swift; sourceTree = "<group>"; };
 		B10000000000000000000015 /* MapNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapNavigator.swift; sourceTree = "<group>"; };
+		B10000000000000000000016 /* BlindSpotNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlindSpotNav.swift; sourceTree = "<group>"; };
 		B1000000000000000000000F /* Phrases */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Phrases; sourceTree = "<group>"; };
 		B10000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -93,6 +95,7 @@
 				B10000000000000000000013 /* UserProfile.swift */,
 				B10000000000000000000014 /* AlwaysListener.swift */,
 				B10000000000000000000015 /* MapNavigator.swift */,
+				B10000000000000000000016 /* BlindSpotNav.swift */,
 				B1000000000000000000000A /* Secrets.swift */,
 				B1000000000000000000000F /* Phrases */,
 				B10000000000000000000011 /* Assets.xcassets */,
@@ -197,6 +200,7 @@
 				A10000000000000000000013 /* UserProfile.swift in Sources */,
 				A10000000000000000000014 /* AlwaysListener.swift in Sources */,
 				A10000000000000000000015 /* MapNavigator.swift in Sources */,
+				A10000000000000000000016 /* BlindSpotNav.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
