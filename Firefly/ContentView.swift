@@ -19,6 +19,12 @@ struct ContentView: View {
                     .scaleEffect(engine.pulseCount % 2 == 0 ? 1.0 : 1.3)
                     .opacity(engine.alert == nil && engine.mode == .idle ? 0.5 : 1.0)
                     .animation(.easeOut(duration: 0.12), value: engine.pulseCount)
+                    // With VoiceOver on, a single tap only selects, so expose asking as a button action too.
+                    .accessibilityElement()
+                    .accessibilityLabel("Ask Firefly")
+                    .accessibilityHint("Double tap, then speak a question or say where to go.")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { engine.handleTap() }
 
                 Text(engine.caption)
                     .font(.title3.weight(.medium))
