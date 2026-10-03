@@ -70,8 +70,10 @@ enum BlindSpotNav {
         "Facing \(cardinal(fromBearing: heading))."
     }
 
+    /// The description already says what and where ("Chair on your left, about 3 steps"). Kept as-is so it
+    /// never contradicts itself ("Obstacle ahead: on your left") and matches the bundled voice clips.
     static func obstaclePhrase(description: String) -> String {
-        "Obstacle ahead: \(description)"
+        description
     }
 
     private static func shorten(_ text: String) -> String {

@@ -52,6 +52,16 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let frameQueue = DispatchQueue(label: "firefly.frames", qos: .userInteractive)
     /// Only touched on frameQueue.
     private nonisolated(unsafe) var lastPreviewTime = Date.distantPast
+    /// Only touched on frameQueue.
+    private nonisolated(unsafe) var lastNamingTime = Date.distantPast
+    private nonisolated static let namingInterval: TimeInterval = 0.7
+    private nonisolated static let namingRange: Float = 2.0
+    /// What the on-device namer last saw in each zone.
+    private var deviceNames: [Zone: (name: String, time: Date)] = [:]
+    private let deviceNameLifetime: TimeInterval = 1.5
+    /// When the current in-path obstacle first appeared; a generic "Obstacle" callout waits briefly for a name.
+    private var inPathSince: Date?
+    private var lastAnnouncedName = ""
 
     private var history: [SIMD3<Float>] = []
     private var beacon: Beacon?
@@ -157,9 +167,25 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             lastPreviewTime = now
             preview = DebugPreview(frame: frame, points: reading.points)
         }
+        // Name the nearest obstacle in the path on the device (Apple Vision): offline and unlimited.
+        var named: (zone: Zone, name: String?)?
+        if now.timeIntervalSince(lastNamingTime) >= Self.namingInterval,
+           let nearest = Zone.allCases.min(by: { reading.distances[$0.rawValue] < reading.distances[$1.rawValue] }),
+           reading.distances[nearest.rawValue] < Self.namingRange,
+           let point = reading.points[nearest.rawValue] {
+            lastNamingTime = now
+            named = (nearest, ObstacleNamer.name(in: frame, at: point))
+        }
         Task { @MainActor in
             self.ingest(reading.distances, camera: camera)
             if let preview { self.preview = preview }
+            if let named {
+                if let name = named.name {
+                    self.deviceNames[named.zone] = (name, Date())
+                } else {
+                    self.deviceNames[named.zone] = nil
+                }
+            }
         }
     }
 
@@ -230,6 +256,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard let alert else {
             lastAnnouncedZone = nil
             lastAnnouncedDistance = .infinity
+            lastAnnouncedName = ""
+            inPathSince = nil
             if wasClose, !quietMode, now.timeIntervalSince(lastVoice) > 2 {
                 say("Clear path", allowNetwork: false)
             }
@@ -256,22 +284,35 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let isNewZone = alert.zone != lastAnnouncedZone
         let muchCloser = alert.distance < lastAnnouncedDistance - 0.6
         let isStale = now.timeIntervalSince(lastAnnouncement) > 10
-        if alert.distance < announceDistance, isNewZone || muchCloser || isStale,
+        let inPath = alert.distance < announceDistance
+        if inPath { inPathSince = inPathSince ?? now } else { inPathSince = nil }
+        let name = deviceName(for: alert.zone, now: now)
+        let nameChanged = name != nil && name != lastAnnouncedName
+        // Give the on-device namer a moment, so the first callout is "Chair ahead", not "Obstacle ahead".
+        let waitingForName = name == nil && now.timeIntervalSince(inPathSince ?? now) < 0.8
+        if inPath, isNewZone || muchCloser || isStale || nameChanged, !waitingForName,
            !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 3 {
             let direction = directionWord(alert.zone)
+            let spokenName = name ?? "Obstacle"
             let line: String
             if profile?.verbosity == .brief {
-                line = BlindSpotNav.obstaclePhrase(description: direction)
+                line = BlindSpotNav.obstaclePhrase(description: "\(spokenName) \(direction)")
             } else {
                 let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-                line = BlindSpotNav.obstaclePhrase(description: "\(direction), \(detail)")
+                line = BlindSpotNav.obstaclePhrase(description: "\(spokenName) \(direction), \(detail)")
             }
             if say(line, allowNetwork: false) {
                 lastAnnouncedZone = alert.zone
                 lastAnnouncedDistance = alert.distance
+                lastAnnouncedName = spokenName
                 lastAnnouncement = now
             }
         }
+    }
+
+    private func deviceName(for zone: Zone, now: Date = Date()) -> String? {
+        guard let entry = deviceNames[zone], now.timeIntervalSince(entry.time) < deviceNameLifetime else { return nil }
+        return entry.name
     }
 
     private func directionWord(_ zone: Zone) -> String {
@@ -741,7 +782,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let refiningName = beacon?.isApproximate == true ? beacon?.name : nil
         // Only name obstacles that are actually in the path, not everything within 3 m.
         let obstacleInPath = (alert?.distance ?? .infinity) < announceDistance
-        guard refiningName != nil || (obstacleInPath && !maps.isNavigating) else { return }
+        // Gemini only names what the phone couldn't.
+        let unnamed = alert.map { deviceName(for: $0.zone) == nil } ?? false
+        guard refiningName != nil || (obstacleInPath && unnamed && !maps.isNavigating) else { return }
         lastSceneRequest = now
         sceneRequestActive = true
         Task {

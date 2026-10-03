@@ -17,6 +17,8 @@ OBJECTS = [
     "Obstacle", "Chair", "Table", "Desk", "Couch", "Person", "Wall",
     "Door", "Doorway", "Backpack", "Bag", "Stairs", "Trash can",
     "Wet floor sign", "Curb", "Open door",
+    # Names from the on-device namer (Firefly/ObstacleNamer.swift).
+    "Bench", "Bicycle", "Car", "Dog", "Sign", "Cabinet", "Shelf", "Box",
 ]
 # Must match FireflyEngine.directionWord.
 DIRECTIONS = ["on your left", "ahead", "on your right"]
