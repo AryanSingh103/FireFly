@@ -2,7 +2,11 @@ import AVFoundation
 
 /// Beeps and guide chimes via AVAudioPlayer (no second AVAudioEngine — that fights AlwaysListener).
 final class TonePlayer {
-    private var player: AVAudioPlayer?
+    // One long-lived player per sound, rewound and replayed. Creating a new AVAudioPlayer for every
+    // beep released the previous one mid-playback, and AVFoundation then crashed calling
+    // finishedPlaying: on the freed player.
+    private var beepPlayer: AVAudioPlayer?
+    private var chimePlayer: AVAudioPlayer?
     private let beepData: Data
     private let chimeData: Data
 
@@ -19,22 +23,27 @@ final class TonePlayer {
         try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
         try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try? session.setActive(true)
+
+        beepPlayer = try? AVAudioPlayer(data: beepData)
+        chimePlayer = try? AVAudioPlayer(data: chimeData)
+        beepPlayer?.prepareToPlay()
+        chimePlayer?.prepareToPlay()
     }
 
     func beep(pan: Float = 0) {
-        play(beepData, pan: pan)
+        play(beepPlayer, pan: pan)
     }
 
     func chime(pan: Float = 0) {
-        play(chimeData, pan: pan)
+        play(chimePlayer, pan: pan)
     }
 
-    private func play(_ data: Data, pan: Float) {
-        guard let next = try? AVAudioPlayer(data: data) else { return }
-        next.pan = pan
-        next.prepareToPlay()
-        player = next
-        next.play()
+    private func play(_ player: AVAudioPlayer?, pan: Float) {
+        guard let player else { return }
+        player.stop()
+        player.currentTime = 0
+        player.pan = pan
+        player.play()
     }
 
     private static func render(duration: Double, sample: (_ time: Float, _ progress: Float) -> Float) -> Data {

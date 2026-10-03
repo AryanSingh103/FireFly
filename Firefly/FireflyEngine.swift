@@ -141,6 +141,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     /// immediately; only small values cross to the main actor. (Doing this on the main queue let frames
     /// pile up behind UI work and ARKit warned it would stop delivering camera images.)
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        // If this queue fell behind, skip stale frames so ARKit gets them back at once instead of
+        // queueing up (ARKit stops the camera if too many are held).
+        guard ProcessInfo.processInfo.systemUptime - frame.timestamp < 0.05 else { return }
         guard let depth = frame.sceneDepth else { return }
         let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
         let camera = frame.camera.transform

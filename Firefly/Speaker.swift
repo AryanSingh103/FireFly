@@ -84,6 +84,9 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
 
     private func start(_ newPlayer: AVAudioPlayer?, pan: Float) -> Bool {
         guard let newPlayer else { return false }
+        // Stop the old player before releasing it; freeing one mid-playback can crash AVFoundation.
+        player?.delegate = nil
+        player?.stop()
         newPlayer.pan = pan
         newPlayer.delegate = self
         player = newPlayer
