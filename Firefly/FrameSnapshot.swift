@@ -5,6 +5,9 @@ import ImageIO
 /// A camera frame frozen at the moment a Gemini request is sent, so the reply can be placed in the world
 /// even though the wearer has moved by the time it arrives.
 struct FrameSnapshot {
+    /// Creating a CIContext is expensive, so one is shared across snapshots.
+    private static let context = CIContext()
+
     let jpeg: Data
     private let cameraTransform: simd_float4x4
     private let intrinsics: simd_float3x3
@@ -20,7 +23,7 @@ struct FrameSnapshot {
         let upright = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         let scale = 768 / max(upright.extent.width, upright.extent.height)
         let scaled = upright.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let jpeg = CIContext().jpegRepresentation(
+        guard let jpeg = FrameSnapshot.context.jpegRepresentation(
             of: scaled,
             colorSpace: CGColorSpaceCreateDeviceRGB(),
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.6]

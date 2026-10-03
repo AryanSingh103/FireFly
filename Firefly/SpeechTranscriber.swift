@@ -15,6 +15,8 @@ final class AppleSpeechTranscriber: SpeechTranscriber {
         let request = SFSpeechURLRecognitionRequest(url: fileURL)
         request.shouldReportPartialResults = false
         let gate = ResumeGate()
+        // Keep the recognizer alive until the callback fires; optimized builds may release it after its last use.
+        defer { withExtendedLifetime(recognizer) {} }
         return try await withCheckedThrowingContinuation { continuation in
             recognizer.recognitionTask(with: request) { @Sendable result, error in
                 if let result, result.isFinal {
