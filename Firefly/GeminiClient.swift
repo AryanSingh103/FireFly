@@ -1,7 +1,14 @@
 import Foundation
 
 enum GeminiClient {
-    struct Failure: Error {}
+    enum Failure: Error {
+        /// No internet, or the request timed out.
+        case offline
+        /// Google refused the request for quota (HTTP 429). Free-tier keys allow only a few requests a day per model.
+        case quota(retryAfter: TimeInterval)
+        /// Missing key, bad model name, or an unexpected reply.
+        case failed
+    }
 
     /// The nearest hazard as "<Object>, <left|ahead|right>", or "none".
     static func nearestHazard(in jpeg: Data) async throws -> String {
@@ -49,11 +56,11 @@ enum GeminiClient {
         if Secrets.backendURL.isEmpty {
             guard !Secrets.geminiKey.isEmpty,
                   let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Secrets.geminiModel):generateContent")
-            else { throw Failure() }
+            else { throw Failure.failed }
             request = URLRequest(url: url)
             request.setValue(Secrets.geminiKey, forHTTPHeaderField: "x-goog-api-key")
         } else {
-            guard let url = URL(string: Secrets.backendURL + "/gemini") else { throw Failure() }
+            guard let url = URL(string: Secrets.backendURL + "/gemini") else { throw Failure.failed }
             request = URLRequest(url: url)
             request.setValue(Secrets.backendKey, forHTTPHeaderField: "x-functions-key")
         }
@@ -74,13 +81,34 @@ enum GeminiClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 10
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw Failure.offline
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 429 { throw Failure.quota(retryAfter: retryDelay(in: data) ?? 60) }
+        guard status == 200,
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = root["candidates"] as? [[String: Any]],
               let content = candidates.first?["content"] as? [String: Any],
               let parts = content["parts"] as? [[String: Any]]
-        else { throw Failure() }
+        else { throw Failure.failed }
         return parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Reads "retryDelay": "1654s" from a 429 reply.
+    private static func retryDelay(in data: Data) -> TimeInterval? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let details = (root["error"] as? [String: Any])?["details"] as? [[String: Any]]
+        else { return nil }
+        for detail in details {
+            if let delay = detail["retryDelay"] as? String, let seconds = TimeInterval(delay.dropLast()) {
+                return seconds
+            }
+        }
+        return nil
     }
 }

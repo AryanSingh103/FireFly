@@ -43,7 +43,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let stopDistance: Float = 0.5
     private let announceDistance: Float = 2.0
     private let arrivalDistance: Float = 1.2
-    private let sceneInterval: TimeInterval = 4
+    /// Automatic obstacle naming. Each call costs one Gemini request, and free-tier keys get very few per day.
+    private let sceneInterval: TimeInterval = 10
+    private let heartbeatInterval: TimeInterval = 1.1
+    /// Set when Gemini answers 429; automatic calls stop until then.
+    private var geminiPausedUntil = Date.distantPast
     private nonisolated static let previewInterval: TimeInterval = 0.12
     private let frameQueue = DispatchQueue(label: "firefly.frames", qos: .userInteractive)
     /// Only touched on frameQueue.
@@ -178,7 +182,15 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let inDanger = (alert?.distance ?? .infinity) < dangerDistance
         maps.setPausedForObstacle((inDanger && maps.isNavigating) || maps.isInInitialNavPhase)
 
-        if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
+        // Something within speaking range is "in the path": fast pulses and beeps. Anything farther
+        // (or nothing at all) gets a steady heartbeat, so the wearer can feel Firefly is still working.
+        let inPath = (alert?.distance ?? .infinity) < announceDistance
+        if !inPath {
+            if now.timeIntervalSince(lastPulse) >= heartbeatInterval {
+                lastPulse = now
+                haptics.heartbeat()
+            }
+        } else if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
             lastPulse = now
             if quietMode, alert.distance < stopDistance {
                 haptics.urgentStop()
@@ -313,7 +325,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                     return
                 }
             } catch {
-                say("Sorry, there's no connection right now, but I can stay in Passive and watch for obstacles.", interrupt: true)
+                say(geminiProblem(error), interrupt: true)
                 guideMode = .passive
                 return
             }
@@ -577,7 +589,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         mood = .thinking
         let hits = await maps.search(query)
         guard !hits.isEmpty else {
-            say("Sorry, there's no connection right now, but I can stay in Passive and watch for obstacles.", interrupt: true)
+            say("I couldn't find that nearby. Try saying it another way.", interrupt: true)
             guideMode = .passive
             return
         }
@@ -682,14 +694,26 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func describeScene(prompt: String) async {
         mood = .thinking
-        guard let snapshot = await captureSnapshot(),
-              let reply = try? await GeminiClient.answer(prompt, in: snapshot.jpeg),
-              !reply.isEmpty
-        else {
-            say("I can't reach the network right now.", interrupt: true)
-            return
+        guard let snapshot = await captureSnapshot() else { return }
+        do {
+            let reply = try await GeminiClient.answer(prompt, in: snapshot.jpeg)
+            say(reply.isEmpty ? "I'm not sure what's there." : reply, interrupt: true)
+        } catch {
+            say(geminiProblem(error), interrupt: true)
         }
-        say(reply, interrupt: true)
+    }
+
+    /// What to say when a Gemini request fails. Only a real network failure is called "no connection".
+    private func geminiProblem(_ error: Error) -> String {
+        switch error as? GeminiClient.Failure {
+        case .offline:
+            return "I can't reach the internet right now, but I'm still watching for obstacles."
+        case .quota(let retryAfter):
+            geminiPausedUntil = Date().addingTimeInterval(retryAfter)
+            return "I've used up my AI requests for now, but I'm still watching for obstacles."
+        default:
+            return "Something went wrong asking the AI, but I'm still watching for obstacles."
+        }
     }
 
     private func speakMapStepIfNeeded(now: Date) {
@@ -713,22 +737,30 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard phase == .ready || phase == .awaitingNavConfirm, !quietMode, !handlingUtterance, !sceneRequestActive,
               now.timeIntervalSince(lastSceneRequest) >= sceneInterval
         else { return }
+        guard now >= geminiPausedUntil else { return }
         let refiningName = beacon?.isApproximate == true ? beacon?.name : nil
-        guard refiningName != nil || (alert != nil && !maps.isNavigating) else { return }
+        // Only name obstacles that are actually in the path, not everything within 3 m.
+        let obstacleInPath = (alert?.distance ?? .infinity) < announceDistance
+        guard refiningName != nil || (obstacleInPath && !maps.isNavigating) else { return }
         lastSceneRequest = now
         sceneRequestActive = true
         Task {
             defer { sceneRequestActive = false }
             guard let snapshot = await captureSnapshot() else { return }
-            if let refiningName {
-                guard let point = try? await GeminiClient.locate(refiningName, in: snapshot.jpeg) else { return }
-                let located = snapshot.worldPoint(atPhotoPoint: point)
-                if !located.isApproximate, beacon?.name == refiningName {
-                    beacon = Beacon(name: refiningName, position: located.position, isApproximate: false)
+            do {
+                if let refiningName {
+                    guard let point = try await GeminiClient.locate(refiningName, in: snapshot.jpeg) else { return }
+                    let located = snapshot.worldPoint(atPhotoPoint: point)
+                    if !located.isApproximate, beacon?.name == refiningName {
+                        beacon = Beacon(name: refiningName, position: located.position, isApproximate: false)
+                    }
+                } else {
+                    announceHazard(try await GeminiClient.nearestHazard(in: snapshot.jpeg))
                 }
-            } else if let phrase = try? await GeminiClient.nearestHazard(in: snapshot.jpeg) {
-                announceHazard(phrase)
-            }
+            } catch GeminiClient.Failure.quota(let retryAfter) {
+                // Background naming is optional; just stop asking until the quota resets.
+                geminiPausedUntil = Date().addingTimeInterval(retryAfter)
+            } catch {}
         }
     }
 

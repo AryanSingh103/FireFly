@@ -22,6 +22,20 @@ final class HapticPulser {
         ])
     }
 
+    /// "All clear": a soft lub-dub, played steadily while nothing is in the path.
+    func heartbeat() {
+        play(events: [(0.0, Float(0.55)), (0.16, Float(0.35))].map { time, intensity in
+            CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.15)
+                ],
+                relativeTime: time
+            )
+        })
+    }
+
     /// Quiet-mode danger: three sharp pulses, no voice.
     func urgentStop() {
         play(events: (0..<3).map { index in
