@@ -33,24 +33,6 @@ enum GeminiClient {
         return try await generate(prompt: prompt, jpeg: jpeg, json: false)
     }
 
-    /// Centre of the target in the photo as fractions (x from the left, y from the top), or nil if missing.
-    static func locate(_ target: String, in jpeg: Data) async throws -> SIMD2<Float>? {
-        let prompt = """
-        Find the \(target) in this photo (door, doorway, EXIT sign, or exit). \
-        If several, pick the nearest usable one. Reply with JSON only: \
-        {"found": true, "box_2d": [ymin, xmin, ymax, xmax]} with coordinates normalized to 0-1000, \
-        or {"found": false} if it is not visible.
-        """
-        let text = try await generate(prompt: prompt, jpeg: jpeg, json: true)
-        let cleaned = text.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
-        guard let data = cleaned.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data)
-        else { return nil }
-        let object = (json as? [String: Any]) ?? (json as? [[String: Any]])?.first
-        guard let box = (object?["box_2d"] as? [NSNumber])?.map(\.floatValue), box.count == 4 else { return nil }
-        return SIMD2((box[1] + box[3]) / 2000, (box[0] + box[2]) / 2000)
-    }
-
     private static func generate(prompt: String, jpeg: Data, json: Bool) async throws -> String {
         var request: URLRequest
         if Secrets.backendURL.isEmpty {

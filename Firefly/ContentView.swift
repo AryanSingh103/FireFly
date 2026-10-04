@@ -1,5 +1,4 @@
 import ARKit
-import MapKit
 import SwiftUI
 import UIKit
 
@@ -14,18 +13,6 @@ struct ContentView: View {
             // Full-bleed camera + red near-depth wash (no grids).
             CameraStage(session: engine.session, preview: engine.preview, obstacleNear: engine.obstacleNear)
                 .ignoresSafeArea()
-
-            // Corner minimap pie
-            VStack {
-                HStack {
-                    Spacer()
-                    MinimapPie(maps: engine.maps, glow: glow)
-                        .frame(width: 120, height: 120)
-                        .padding(.top, 12)
-                        .padding(.trailing, 12)
-                }
-                Spacer()
-            }
 
             // Firefly orb + captions
             VStack {
@@ -57,22 +44,8 @@ struct ContentView: View {
     }
 
     private var statusLine: String {
-        if engine.quietMode { return "Quiet · haptics only · \(modeLabel)" }
-        return modeLabel
-    }
-
-    private var modeLabel: String {
-        switch engine.phase {
-        case .awaitingNavConfirm: return "Confirm destination"
-        case .handling: return "Thinking"
-        case .ready:
-            if engine.guideMode == .navigate {
-                return engine.beaconName.map { "Guiding to \($0)" }
-                    ?? engine.maps.destinationName.map { "Navigating to \($0)" }
-                    ?? "Navigate"
-            }
-            return "Passive · say “Firefly …”"
-        }
+        let mode = engine.isHandling ? "Thinking" : "Watching · say “Firefly …”"
+        return engine.quietMode ? "Quiet · haptics only · \(mode)" : mode
     }
 }
 
@@ -144,7 +117,6 @@ struct FireflyOrb: View {
     private var energy: Double {
         switch mood {
         case .idle: return 0.35
-        case .guiding: return 0.6
         case .listening: return 0.8
         case .thinking: return 0.7
         case .happy: return 1.0
@@ -234,74 +206,5 @@ struct FireflyOrb: View {
         antennae.addQuadCurve(to: CGPoint(x: center.x + 8 - wiggle, y: center.y - 20),
                               control: CGPoint(x: center.x + 3, y: center.y - 18))
         context.stroke(antennae, with: .color(Color(white: 0.35)), lineWidth: 1.2)
-    }
-}
-
-// MARK: - Minimap
-
-struct MinimapPie: View {
-    @ObservedObject var maps: MapNavigator
-    let glow: Color
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.black.opacity(0.55))
-                .overlay(Circle().stroke(glow.opacity(0.7), lineWidth: 2))
-            MinimapRepresentable(maps: maps)
-                .clipShape(Circle())
-                .padding(4)
-        }
-        .accessibilityLabel("Minimap")
-    }
-}
-
-struct MinimapRepresentable: UIViewRepresentable {
-    @ObservedObject var maps: MapNavigator
-
-    func makeUIView(context: Context) -> MKMapView {
-        let map = MKMapView(frame: .zero)
-        map.isUserInteractionEnabled = false
-        map.isZoomEnabled = false
-        map.isScrollEnabled = false
-        map.isPitchEnabled = false
-        map.isRotateEnabled = false
-        map.showsUserLocation = true
-        map.pointOfInterestFilter = .excludingAll
-        map.overrideUserInterfaceStyle = .dark
-        return map
-    }
-
-    func updateUIView(_ map: MKMapView, context: Context) {
-        // SwiftUI calls this on every parent redraw; re-centring the map each time is expensive.
-        let coordinate = maps.userCoordinate
-        let state = "\(maps.route.map { ObjectIdentifier($0).hashValue } ?? 0)|\(coordinate?.latitude ?? 0)|\(coordinate?.longitude ?? 0)"
-        guard state != context.coordinator.lastState else { return }
-        context.coordinator.lastState = state
-        map.removeOverlays(map.overlays)
-        if let route = maps.route {
-            map.addOverlay(route.polyline)
-            let rect = route.polyline.boundingMapRect
-            map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 20, left: 20, bottom: 20, right: 20), animated: false)
-        } else if let coordinate = maps.userCoordinate {
-            let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 180, longitudinalMeters: 180)
-            map.setRegion(region, animated: false)
-        }
-        map.delegate = context.coordinator
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject, MKMapViewDelegate {
-        var lastState = ""
-        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let polyline = overlay as? MKPolyline {
-                let renderer = MKPolylineRenderer(polyline: polyline)
-                renderer.strokeColor = UIColor(red: 0.85, green: 1, blue: 0.4, alpha: 0.95)
-                renderer.lineWidth = 4
-                return renderer
-            }
-            return MKOverlayRenderer(overlay: overlay)
-        }
     }
 }

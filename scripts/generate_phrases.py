@@ -22,49 +22,31 @@ OBJECTS = [
 ]
 # Must match FireflyEngine.directionWord.
 DIRECTIONS = ["on your left", "ahead", "on your right"]
-# Door/exit beacon lines: "<Target> <side>". Targets match FireflyEngine.indoorTarget.
-BEACON_TARGETS = ["Exit", "Door", "Doorway", "Stairs"]
-BEACON_SIDES = ["a bit left", "a bit right", "straight ahead"]
-# Distance parts from UserProfile.formatDistance. Callouts start at about 2 m and the beacon
-# rarely speaks beyond about 10 m, so these ranges cover nearly every line.
-MAX_STEPS = 15
-MAX_FEET = 35
+# Distance parts from UserProfile.formatDistance. Callouts start at about 2 m (6.5 ft), so these
+# ranges cover every callout with room to spare.
+MAX_STEPS = 8
+MAX_FEET = 12
 EXTRAS = [
     "Stop",
     "Clear path",
-    "Turn slowly",
     "Okay",
-    "Okay. Staying Passive.",
-    "Okay. I'll watch for obstacles and call them out.",
-    "I didn't catch that",
-    "I can't reach the network right now.",
-    "Sorry, there's no connection right now, but I can stay in Passive and watch for obstacles.",
+    "Hi, I'm Firefly. I'll watch the path with you.",
+    "I'm here. Ask me what's in front of you.",
     "I might be flipped — check the lanyard.",
-    "Found the door. I'll guide you there.",
-    "Found the exit. I'll guide you there.",
-    "You're at the door. Anything else?",
-    "You're at the exit. Anything else?",
     "Quiet mode on. I'll tap only.",
     "Quiet mode off. I'll speak again.",
-    "I'm here. Where do you want to go?",
-    "Hi, I'm Firefly. I'll help you get around. Where would you like to go?",
     "Okay, I'll use meters.",
     "Okay, I'll use steps and feet.",
     "Okay, I'll keep it short.",
     "Okay, I'll give more detail.",
     "Okay, I'll count shorter steps.",
     "Okay, normal steps.",
-    "Start nav?",
-    "Say yes to start nav, or no to cancel.",
     "Closing Firefly.",
-    "Obstacle on your left",
-    "Obstacle ahead",
-    "Obstacle on your right",
-    "Person ahead — slow down.",
-    "Stairs going down, center.",
-    "Move about two steps left.",
-    "Move about two steps right.",
-    "Wait.",
+    "I'm not sure what's there.",
+    "I can't reach the internet right now, but I'm still watching for obstacles.",
+    "I've used up my AI requests for now, but I'm still watching for obstacles.",
+    "Something went wrong asking the AI, but I'm still watching for obstacles.",
+    "I'm with you. Stay still if it feels unsafe. Call out for people nearby. I can describe what's around — ask me.",
 ]
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "Firefly" / "Phrases"
@@ -85,22 +67,32 @@ def synthesize(text: str, api_key: str, voice_id: str) -> bytes:
         return response.read()
 
 
-def main() -> None:
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    voice_id = os.environ.get("ELEVENLABS_VOICE_ID")
-    if not api_key or not voice_id:
-        sys.exit("Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID first.")
-
+def all_phrases() -> list[str]:
     # Lines like "Chair on your left, about 3 steps, maybe 7 feet" are played as one clip per
     # comma-separated part (see Speaker.clipURLs), so each part is generated on its own.
     phrases = [f"{obj} {direction}" for obj in OBJECTS for direction in DIRECTIONS]
-    phrases += [f"{target} {side}" for target in BEACON_TARGETS for side in BEACON_SIDES]
     for n in range(1, MAX_STEPS + 1):
         unit = "step" if n == 1 else "steps"
         phrases += [f"about {n} {unit}", f"roughly {n} {unit}"]
     for n in range(1, MAX_FEET + 1):
         phrases += [f"about {n} feet", f"maybe {n} feet"]
     phrases += EXTRAS
+    return list(dict.fromkeys(phrases))
+
+
+def main() -> None:
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    voice_id = os.environ.get("ELEVENLABS_VOICE_ID")
+    if not api_key or not voice_id:
+        sys.exit("Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID first.")
+
+    phrases = all_phrases()
+    # Clips for lines the app no longer says are removed.
+    wanted = {f"{slug(p)}.mp3" for p in phrases}
+    for old in OUTPUT_DIR.glob("*.mp3"):
+        if old.name not in wanted:
+            old.unlink()
+            print(f"removed {old.name}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for phrase in phrases:
         path = OUTPUT_DIR / f"{slug(phrase)}.mp3"

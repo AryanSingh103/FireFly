@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* AlertPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AlertPolicy.swift */; };
-		A10000000000000000000002 /* Beacon.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* Beacon.swift */; };
 		A10000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* ContentView.swift */; };
 		A10000000000000000000004 /* DepthZoneAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* DepthZoneAnalyzer.swift */; };
 		A10000000000000000000012 /* DebugPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* DebugPreview.swift */; };
@@ -20,20 +19,15 @@
 		A10000000000000000000009 /* HapticPulser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* HapticPulser.swift */; };
 		A1000000000000000000000A /* Secrets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000A /* Secrets.swift */; };
 		A1000000000000000000000B /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000B /* Speaker.swift */; };
-		A1000000000000000000000C /* SpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* SpeechTranscriber.swift */; };
 		A1000000000000000000000D /* TonePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* TonePlayer.swift */; };
-		A1000000000000000000000E /* VoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* VoiceRecorder.swift */; };
 		A10000000000000000000013 /* UserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* UserProfile.swift */; };
 		A10000000000000000000014 /* AlwaysListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* AlwaysListener.swift */; };
-		A10000000000000000000015 /* MapNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* MapNavigator.swift */; };
-		A10000000000000000000016 /* BlindSpotNav.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* BlindSpotNav.swift */; };
 		A1000000000000000000000F /* Phrases in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* Phrases */; };
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		B10000000000000000000001 /* AlertPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertPolicy.swift; sourceTree = "<group>"; };
-		B10000000000000000000002 /* Beacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Beacon.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* DepthZoneAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthZoneAnalyzer.swift; sourceTree = "<group>"; };
 		B10000000000000000000012 /* DebugPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPreview.swift; sourceTree = "<group>"; };
@@ -45,13 +39,9 @@
 		B10000000000000000000009 /* HapticPulser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticPulser.swift; sourceTree = "<group>"; };
 		B1000000000000000000000A /* Secrets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Secrets.swift; sourceTree = "<group>"; };
 		B1000000000000000000000B /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
-		B1000000000000000000000C /* SpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriber.swift; sourceTree = "<group>"; };
 		B1000000000000000000000D /* TonePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TonePlayer.swift; sourceTree = "<group>"; };
-		B1000000000000000000000E /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		B10000000000000000000013 /* UserProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfile.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* AlwaysListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlwaysListener.swift; sourceTree = "<group>"; };
-		B10000000000000000000015 /* MapNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapNavigator.swift; sourceTree = "<group>"; };
-		B10000000000000000000016 /* BlindSpotNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlindSpotNav.swift; sourceTree = "<group>"; };
 		B1000000000000000000000F /* Phrases */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Phrases; sourceTree = "<group>"; };
 		B10000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -87,18 +77,13 @@
 				B10000000000000000000012 /* DebugPreview.swift */,
 				B10000000000000000000020 /* ObstacleNamer.swift */,
 				B10000000000000000000001 /* AlertPolicy.swift */,
-				B10000000000000000000002 /* Beacon.swift */,
 				B10000000000000000000007 /* FrameSnapshot.swift */,
 				B10000000000000000000008 /* GeminiClient.swift */,
 				B10000000000000000000009 /* HapticPulser.swift */,
 				B1000000000000000000000D /* TonePlayer.swift */,
 				B1000000000000000000000B /* Speaker.swift */,
-				B1000000000000000000000C /* SpeechTranscriber.swift */,
-				B1000000000000000000000E /* VoiceRecorder.swift */,
 				B10000000000000000000013 /* UserProfile.swift */,
 				B10000000000000000000014 /* AlwaysListener.swift */,
-				B10000000000000000000015 /* MapNavigator.swift */,
-				B10000000000000000000016 /* BlindSpotNav.swift */,
 				B1000000000000000000000A /* Secrets.swift */,
 				B1000000000000000000000F /* Phrases */,
 				B10000000000000000000011 /* Assets.xcassets */,
@@ -186,7 +171,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* AlertPolicy.swift in Sources */,
-				A10000000000000000000002 /* Beacon.swift in Sources */,
 				A10000000000000000000003 /* ContentView.swift in Sources */,
 				A10000000000000000000004 /* DepthZoneAnalyzer.swift in Sources */,
 				A10000000000000000000012 /* DebugPreview.swift in Sources */,
@@ -198,13 +182,9 @@
 				A10000000000000000000009 /* HapticPulser.swift in Sources */,
 				A1000000000000000000000A /* Secrets.swift in Sources */,
 				A1000000000000000000000B /* Speaker.swift in Sources */,
-				A1000000000000000000000C /* SpeechTranscriber.swift in Sources */,
 				A1000000000000000000000D /* TonePlayer.swift in Sources */,
-				A1000000000000000000000E /* VoiceRecorder.swift in Sources */,
 				A10000000000000000000013 /* UserProfile.swift in Sources */,
 				A10000000000000000000014 /* AlwaysListener.swift in Sources */,
-				A10000000000000000000015 /* MapNavigator.swift in Sources */,
-				A10000000000000000000016 /* BlindSpotNav.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

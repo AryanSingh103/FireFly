@@ -67,14 +67,3 @@ struct UserProfile: Codable, Equatable {
         max(1, Int((meters * 3.281).rounded()))
     }
 }
-
-enum GuideMode: String {
-    case passive
-    case navigate
-}
-
-enum AgentPhase: String {
-    case ready
-    case awaitingNavConfirm
-    case handling
-}

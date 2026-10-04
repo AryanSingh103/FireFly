@@ -5,10 +5,12 @@ import CoreMotion
 import Speech
 import UIKit
 
+/// Firefly is a passive companion: it watches the next few steps and calls out what's there. Getting
+/// somewhere is left to a maps app running alongside it.
 @MainActor
 final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     enum Mood: String {
-        case idle, listening, thinking, guiding, danger, happy
+        case idle, listening, thinking, danger, happy
     }
 
     private(set) var distances = SIMD3<Float>(repeating: 5)
@@ -18,17 +20,13 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var pulseCount = 0
     @Published private(set) var caption = ""
     @Published private(set) var status = "Starting"
-    @Published private(set) var guideMode = GuideMode.passive
-    @Published private(set) var phase = AgentPhase.ready
+    @Published private(set) var isHandling = false
     @Published private(set) var mood = Mood.idle
     @Published private(set) var isSpeaking = false
     @Published private(set) var quietMode = false
-    @Published private(set) var beaconName: String?
     @Published private(set) var profile: UserProfile?
     @Published private(set) var preview: DebugPreview?
     @Published private(set) var lastHeard = ""
-
-    let maps = MapNavigator()
 
     /// Shared with the live camera view in ContentView.
     let session = ARSession()
@@ -39,10 +37,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let motion = CMMotionManager()
 
     private let smoothingFrames = 5
-    private let dangerDistance: Float = 1.0
     private let stopDistance: Float = 0.5
     private let announceDistance: Float = 2.0
-    private let arrivalDistance: Float = 1.2
     /// Automatic obstacle naming. Each call costs one Gemini request, and free-tier keys get very few per day.
     private let sceneInterval: TimeInterval = 10
     /// Slow enough to clearly differ from the slowest obstacle rate (about 0.7 s at 2 m).
@@ -70,31 +66,20 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var lastAnnouncedName = ""
 
     private var history: [SIMD3<Float>] = []
-    private var beacon: Beacon?
-    private var lastCamera = matrix_identity_float4x4
     private var lastPulse = Date.distantPast
-    private var lastChime = Date.distantPast
     private var lastStop = Date.distantPast
     private var lastVoice = Date.distantPast
     private var lastAnnouncement = Date.distantPast
     private var lastAnnouncedZone: Zone?
+    private var lastAnnouncedDistance: Float = .infinity
     private var wasClose = false
     private var lastSceneRequest = Date.distantPast
     private var sceneRequestActive = false
     private var lastHazard = ""
     private var lastHazardTime = Date.distantPast
-    private var lastMapPrompt = ""
-    private var lastBeaconSide = ""
-    private var lastBeaconLine = Date.distantPast
-    private var lastAnnouncedDistance: Float = .infinity
     private var flipWarned = false
     private var handlingUtterance = false
-    private var askedExitFirst = false
     private var speechWatchTask: Task<Void, Never>?
-    /// Firefly just asked a question; its answer doesn't need the "Firefly" prefix until this time.
-    private var replyDeadline = Date.distantPast
-    private var lastSpokeQuestion = false
-    private let replyWindow: TimeInterval = 8
 
     override init() {
         super.init()
@@ -116,7 +101,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         AVAudioSession.sharedInstance().requestRecordPermission { @Sendable _ in }
         SFSpeechRecognizer.requestAuthorization { @Sendable _ in }
-        maps.requestPermission()
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.frameSemantics = .sceneDepth
@@ -129,7 +113,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 800_000_000)
-            await self.greetOnLaunch()
+            self.greetOnLaunch()
         }
     }
 
@@ -168,7 +152,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard ProcessInfo.processInfo.systemUptime - frame.timestamp < 0.05 else { return }
         guard let depth = frame.sceneDepth else { return }
         let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
-        let camera = frame.camera.transform
         var preview: DebugPreview?
         let now = Date()
         if now.timeIntervalSince(lastPreviewTime) >= Self.previewInterval {
@@ -185,7 +168,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             named = (nearest, ObstacleNamer.name(in: frame, at: point))
         }
         Task { @MainActor in
-            self.ingest(reading.distances, camera: camera)
+            self.ingest(reading.distances)
             if let preview { self.preview = preview }
             if let named {
                 if let name = named.name {
@@ -204,8 +187,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Safety loop
 
-    private func ingest(_ reading: SIMD3<Float>, camera: simd_float4x4) {
-        lastCamera = camera
+    private func ingest(_ reading: SIMD3<Float>) {
         history.append(reading)
         if history.count > smoothingFrames { history.removeFirst() }
         distances = history.reduce(SIMD3<Float>(repeating: 0), +) / Float(history.count)
@@ -213,13 +195,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         if (alert != nil) != obstacleNear { obstacleNear = alert != nil }
 
         let now = Date()
-        let inDanger = (alert?.distance ?? .infinity) < dangerDistance
-        maps.setPausedForObstacle((inDanger && maps.isNavigating) || maps.isInInitialNavPhase)
 
         // Haptics alone say where and how close, so quiet mode works by touch:
         // - clear path: one slow, steady tap so the wearer feels Firefly is working;
         // - obstacle in the path: a rhythm for its side (see HapticPulser.directional) that repeats faster
-        //   as it gets closer, with a soft beep;
+        //   as it gets closer, with a beep;
         // - the last stretch before something ahead: a continuous buzz that strengthens as you approach.
         let inPath = (alert?.distance ?? .infinity) < announceDistance
         // Only for something straight ahead: a wall beside you in a hallway shouldn't buzz the whole way.
@@ -236,7 +216,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             } else {
                 haptics.directional(alert.zone, intensity: pulseStrength)
             }
-            if !quietMode, phase != .handling, beacon == nil || inDanger {
+            if !quietMode, !handlingUtterance {
                 tones.beep(pan: 0)
             }
             pulseCount += 1
@@ -250,20 +230,16 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                 listener.setPaused(true)
             } else if !handlingUtterance {
                 listener.setPaused(false)
-                if mood != .danger, mood != .guiding { mood = .idle }
+                if mood != .danger { mood = .idle }
             }
         }
 
         speakWarnings(now: now)
-        updateBeacon(camera: camera, inDanger: inDanger, now: now)
         runSceneLoop(now: now)
-        speakMapStepIfNeeded(now: now)
     }
 
     private func speakWarnings(now: Date) {
         guard !handlingUtterance else { return }
-        // BlindSpot: don't let obstacle callouts talk over the opening nav summary.
-        if maps.isInInitialNavPhase { return }
 
         guard let alert else {
             lastAnnouncedZone = nil
@@ -274,7 +250,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                 say("Clear path", allowNetwork: false)
             }
             wasClose = false
-            if mood == .danger { mood = guideMode == .navigate ? .guiding : .idle }
+            if mood == .danger { mood = .idle }
             return
         }
 
@@ -304,22 +280,22 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let waitingForName = name == nil && now.timeIntervalSince(inPathSince ?? now) < 0.8
         if inPath, isNewZone || muchCloser || isStale || nameChanged, !waitingForName,
            !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 3 {
-            let direction = directionWord(alert.zone)
             let spokenName = name ?? "Obstacle"
-            let line: String
-            if profile?.verbosity == .brief {
-                line = BlindSpotNav.obstaclePhrase(description: "\(spokenName) \(direction)")
-            } else {
-                let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-                line = BlindSpotNav.obstaclePhrase(description: "\(spokenName) \(direction), \(detail)")
-            }
-            if say(line, allowNetwork: false) {
+            if say(callout(spokenName, alert), allowNetwork: false) {
                 lastAnnouncedZone = alert.zone
                 lastAnnouncedDistance = alert.distance
                 lastAnnouncedName = spokenName
                 lastAnnouncement = now
             }
         }
+    }
+
+    /// "Chair on your left, about 3 steps, maybe 7 feet". Each comma-separated part is a bundled clip.
+    private func callout(_ name: String, _ alert: ObstacleAlert) -> String {
+        let direction = directionWord(alert.zone)
+        if profile?.verbosity == .brief { return "\(name) \(direction)" }
+        let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
+        return "\(name) \(direction), \(detail)"
     }
 
     private func deviceName(for zone: Zone, now: Date = Date()) -> String? {
@@ -335,98 +311,21 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    // MARK: - Beacon (exit / door)
-
-    private func updateBeacon(camera: simd_float4x4, inDanger: Bool, now: Date) {
-        guard let beacon else { return }
-        mood = .guiding
-        let guidance = beacon.guidance(from: camera)
-        if !beacon.isApproximate, guidance.distance < arrivalDistance {
-            self.beacon = nil
-            beaconName = nil
-            guideMode = .passive
-            mood = .happy
-            say("You're at the \(beacon.name). Anything else?", interrupt: true)
-        } else if !inDanger, !quietMode, now.timeIntervalSince(lastChime) >= guidance.interval {
-            lastChime = now
-            tones.chime(pan: 0)
-            let side: String
-            if guidance.pan < -0.35 { side = "a bit left" }
-            else if guidance.pan > 0.35 { side = "a bit right" }
-            else { side = "straight ahead" }
-            let sideChanged = side != lastBeaconSide
-            if now.timeIntervalSince(lastVoice) > 3, sideChanged || now.timeIntervalSince(lastBeaconLine) > 10 {
-                let name = beacon.name.prefix(1).uppercased() + beacon.name.dropFirst()
-                let detail = profile?.formatDistance(guidance.distance) ?? UserProfile.defaultDistance(guidance.distance)
-                if say("\(name) \(side), \(detail)", allowNetwork: false) {
-                    lastBeaconSide = side
-                    lastBeaconLine = now
-                }
-            }
-        }
-    }
-
-    private func startBeacon(to target: String) async {
-        guideMode = .navigate
-        mood = .thinking
-        for attempt in 0..<3 {
-            guard let snapshot = await captureSnapshot() else { break }
-            do {
-                if let point = try await GeminiClient.locate(target, in: snapshot.jpeg) {
-                    let located = snapshot.worldPoint(atPhotoPoint: point)
-                    setBeacon(Beacon(name: target, position: located.position, isApproximate: located.isApproximate))
-                    return
-                }
-            } catch {
-                say(geminiProblem(error), interrupt: true)
-                guideMode = .passive
-                return
-            }
-            if attempt < 2 {
-                say("Turn slowly", interrupt: true)
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-            }
-        }
-        say("I can't see a \(target) yet. Turn slowly and ask me again.", interrupt: true)
-        guideMode = .passive
-    }
-
-    private func setBeacon(_ newBeacon: Beacon) {
-        beacon = newBeacon
-        lastBeaconSide = ""
-        beaconName = newBeacon.name
-        guideMode = .navigate
-        mood = .guiding
-        say("Found the \(newBeacon.name). I'll guide you there.", interrupt: true)
-    }
-
-    // MARK: - Launch
+    // MARK: - Voice
 
     /// A fixed sentence with a bundled clip, so the first thing anyone hears is Firefly's voice instantly,
     /// with or without Wi-Fi.
-    private func greetOnLaunch() async {
-        say("Hi, I'm Firefly. I'll help you get around. Where would you like to go?", interrupt: true)
-        status = "Say Firefly, then your request"
+    private func greetOnLaunch() {
+        say("Hi, I'm Firefly. I'll watch the path with you.", interrupt: true)
+        status = "Say Firefly, then your question"
     }
 
     private func handleUtterance(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastHeard = trimmed
-
-        if phase == .awaitingNavConfirm {
-            Task { await handleNavConfirm(trimmed) }
-            return
-        }
-
-        if let command = Self.stripFireflyPrefix(trimmed) {
-            replyDeadline = .distantPast
-            Task { await handleCommand(command) }
-        } else if Date() < replyDeadline {
-            // Answering Firefly's own question ("Where do you want to go?" / "Anything else?").
-            replyDeadline = .distantPast
-            Task { await handleCommand(trimmed) }
-        }
+        guard let command = Self.stripFireflyPrefix(trimmed) else { return }
+        Task { await handleCommand(command) }
     }
 
     private static func stripFireflyPrefix(_ text: String) -> String? {
@@ -442,19 +341,19 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func handleCommand(_ command: String) async {
         handlingUtterance = true
-        phase = .handling
+        isHandling = true
         mood = .thinking
         listener.setPaused(true)
         defer {
             handlingUtterance = false
-            if phase == .handling { phase = maps.pendingPlace != nil ? .awaitingNavConfirm : .ready }
+            isHandling = false
             listener.setPaused(speaker.isSpeaking)
-            if mood == .thinking { mood = guideMode == .navigate ? .guiding : .idle }
+            if mood == .thinking { mood = .idle }
         }
 
         let lowered = command.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if lowered.isEmpty {
-            say("I'm here. Where do you want to go?", interrupt: true)
+            say("I'm here. Ask me what's in front of you.", interrupt: true)
             return
         }
 
@@ -481,9 +380,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        if lowered.contains("stop") || lowered.contains("cancel") {
-            cancelGuidance()
-            say("Okay. Staying in Passive.", interrupt: true)
+        if lowered.contains("stop") || lowered.contains("cancel") || lowered.contains("never mind") {
+            speaker.stop()
+            say("Okay", interrupt: true)
             return
         }
 
@@ -494,51 +393,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        if isPassiveIntent(lowered) {
-            cancelGuidance()
-            guideMode = .passive
-            say("Okay. I'll watch for obstacles and call them out.", interrupt: true)
-            return
-        }
-
-        if lowered.contains("exit") || lowered.contains("way out") {
-            await startBeacon(to: "exit")
-            return
-        }
-        if lowered.contains("door") && (lowered.contains("take") || lowered.contains("find") || lowered.contains("guide") || lowered.contains("to the")) {
-            await startBeacon(to: "door")
-            return
-        }
-
-        if let target = Self.indoorTarget(in: lowered) {
-            await startBeacon(to: target)
-            return
-        }
-
-        if lowered.contains("where am i") || lowered.contains("what's my location") || lowered.contains("what is my location") {
-            say(maps.whereAmI(), interrupt: true)
-            return
-        }
-        if lowered.contains("which way") || lowered.contains("am i facing") || lowered.contains("facing") {
-            say(maps.facing(), interrupt: true)
-            return
-        }
-
-        if lowered.contains("what's in front") || lowered.contains("what is in front")
-            || lowered.contains("describe") || lowered.contains("around me") {
-            await describeScene(prompt: command)
-            return
-        }
-
-        // BlindSpot: "nearest coffee" picks one; vague "a coffee shop" lists options.
-        if looksLikePlaceRequest(lowered) {
-            let query = Self.placeQuery(from: lowered) ?? command
-            let nearestOnly = lowered.contains("nearest") || lowered.contains("closest")
-            await searchAndOffer(query, autoPickNearest: nearestOnly)
-            return
-        }
-
-        // Fallback: treat as scene question
+        // Anything else is a question about what the camera sees: "what's in front of me?",
+        // "what does that sign say?", "is that door open?".
         await describeScene(prompt: command)
     }
 
@@ -574,144 +430,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         return reply
     }
 
-    private func isPassiveIntent(_ lowered: String) -> Bool {
-        let keys = ["nowhere", "no where", "nothing", "just watch", "just help", "passive", "stay with me", "no destination", "nah"]
-        return keys.contains { lowered.contains($0) }
-    }
-
-    private func looksLikePlaceRequest(_ lowered: String) -> Bool {
-        lowered.contains("take me") || lowered.contains("navigate") || lowered.contains("directions")
-            || lowered.contains("how do i get") || lowered.contains("go to") || lowered.contains("find ")
-            || lowered.contains("library") || lowered.contains("building") || lowered.contains("cafe")
-    }
-
-    private static func indoorTarget(in lowered: String) -> String? {
-        for phrase in ["take me to the ", "guide me to the ", "lead me to the ", "find the ", "go to the "] {
-            guard let range = lowered.range(of: phrase) else { continue }
-            let rest = lowered[range.upperBound...].trimmingCharacters(in: .whitespaces)
-            let word = rest.split(separator: " ").first.map(String.init) ?? ""
-            if ["exit", "door", "doorway", "stairs"].contains(word) { return word }
-        }
-        return nil
-    }
-
-    private static func placeQuery(from lowered: String) -> String? {
-        for phrase in ["take me to ", "guide me to ", "navigate to ", "directions to ", "go to ", "find "] {
-            guard let range = lowered.range(of: phrase) else { continue }
-            var q = String(lowered[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if q.hasPrefix("the ") { q = String(q.dropFirst(4)) }
-            return q.isEmpty ? nil : q
-        }
-        return nil
-    }
-
-    private func searchAndOffer(_ query: String, autoPickNearest: Bool = false) async {
-        mood = .thinking
-        let hits = await maps.search(query)
-        guard !hits.isEmpty else {
-            say("I couldn't find that nearby. Try saying it another way.", interrupt: true)
-            guideMode = .passive
-            return
-        }
-        if autoPickNearest, let first = hits.first {
-            maps.holdForConfirm(first)
-            if let spoken = await maps.startPendingRoute() {
-                guideMode = .navigate
-                mood = .guiding
-                phase = .ready
-                say(spoken, interrupt: true)
-            }
-            return
-        }
-        // BlindSpot: list up to 3, ask which one.
-        maps.holdChoices(hits)
-        phase = .awaitingNavConfirm
-        var lines: [String] = []
-        for (index, hit) in hits.prefix(3).enumerated() {
-            lines.append("\(index + 1). \(hit.addressLine)")
-        }
-        say("I found \(hits.count) places: \(lines.joined(separator: ". ")). Which one? Say the number or name.", interrupt: true)
-    }
-
-    private func handleNavConfirm(_ text: String) async {
-        handlingUtterance = true
-        listener.setPaused(true)
-        defer {
-            handlingUtterance = false
-            listener.setPaused(speaker.isSpeaking)
-        }
-        // Allow with or without Firefly prefix during confirm.
-        let body = Self.stripFireflyPrefix(text) ?? text
-        let answer = body.lowercased()
-
-        if answer.contains("exit first") || answer.contains("find exit") || (askedExitFirst && answer.contains("exit")) {
-            askedExitFirst = false
-            maps.stop()
-            phase = .ready
-            await startBeacon(to: "exit")
-            return
-        }
-
-        if askedExitFirst && (answer.contains("outdoor") || answer.contains("outside") || answer.contains("navigation") || answer.contains("maps")) {
-            askedExitFirst = false
-            if let spoken = await maps.startPendingRoute() {
-                guideMode = .navigate
-                mood = .guiding
-                phase = .ready
-                say(spoken, interrupt: true)
-            } else {
-                phase = .ready
-                say("I couldn't start navigation. Staying Passive.", interrupt: true)
-            }
-            return
-        }
-
-        if answer.hasPrefix("y") || answer.contains("start") || answer.contains("yes") || answer.contains("go")
-            || maps.pickChoice(matching: answer) != nil {
-            if let picked = maps.pickChoice(matching: answer) {
-                maps.holdForConfirm(picked)
-            }
-            // If clearly indoors and destination is far, ask about exit first once.
-            if !askedExitFirst, let place = maps.pendingPlace, place.distanceMeters > 80, alert != nil {
-                askedExitFirst = true
-                say("We might be inside. Should I take you to an exit first, or start outdoor navigation?", interrupt: true)
-                return
-            }
-            askedExitFirst = false
-            if let spoken = await maps.startPendingRoute() {
-                guideMode = .navigate
-                mood = .guiding
-                phase = .ready
-                say(spoken, interrupt: true)
-            } else {
-                phase = .ready
-                say("I couldn't start navigation. Staying Passive.", interrupt: true)
-            }
-            return
-        }
-
-        if answer.hasPrefix("n") || answer.contains("no") || answer.contains("cancel") {
-            askedExitFirst = false
-            maps.stop()
-            phase = .ready
-            guideMode = .passive
-            say("Okay. Staying Passive.", interrupt: true)
-            return
-        }
-
-        say("Say one, two, or three — or yes to start, no to cancel.", interrupt: true)
-    }
-
-    private func cancelGuidance() {
-        beacon = nil
-        beaconName = nil
-        maps.stop()
-        askedExitFirst = false
-        guideMode = .passive
-        phase = .ready
-        mood = .idle
-    }
-
     private func describeScene(prompt: String) async {
         mood = .thinking
         guard let snapshot = await captureSnapshot() else { return }
@@ -736,49 +454,21 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func speakMapStepIfNeeded(now: Date) {
-        guard guideMode == .navigate, maps.isNavigating, !quietMode, !maps.pausedForObstacle else { return }
-        guard let step = maps.nextInstruction, step != lastMapPrompt else { return }
-        guard now.timeIntervalSince(lastVoice) > 5 else { return }
-        if step.lowercased().contains("you're at") {
-            lastMapPrompt = step
-            mood = .happy
-            say(step + " Anything else?", interrupt: true)
-            cancelGuidance()
-            return
-        }
-        lastMapPrompt = step
-        _ = say(step, allowNetwork: true)
-    }
-
-    // MARK: - Gemini naming loop
+    // MARK: - Gemini naming (only for what the phone couldn't name)
 
     private func runSceneLoop(now: Date) {
-        guard phase == .ready || phase == .awaitingNavConfirm, !quietMode, !handlingUtterance, !sceneRequestActive,
-              now.timeIntervalSince(lastSceneRequest) >= sceneInterval
+        guard !quietMode, !handlingUtterance, !sceneRequestActive,
+              now.timeIntervalSince(lastSceneRequest) >= sceneInterval,
+              now >= geminiPausedUntil,
+              let alert, alert.distance < announceDistance, deviceName(for: alert.zone) == nil
         else { return }
-        guard now >= geminiPausedUntil else { return }
-        let refiningName = beacon?.isApproximate == true ? beacon?.name : nil
-        // Only name obstacles that are actually in the path, not everything within 3 m.
-        let obstacleInPath = (alert?.distance ?? .infinity) < announceDistance
-        // Gemini only names what the phone couldn't.
-        let unnamed = alert.map { deviceName(for: $0.zone) == nil } ?? false
-        guard refiningName != nil || (obstacleInPath && unnamed && !maps.isNavigating) else { return }
         lastSceneRequest = now
         sceneRequestActive = true
         Task {
             defer { sceneRequestActive = false }
             guard let snapshot = await captureSnapshot() else { return }
             do {
-                if let refiningName {
-                    guard let point = try await GeminiClient.locate(refiningName, in: snapshot.jpeg) else { return }
-                    let located = snapshot.worldPoint(atPhotoPoint: point)
-                    if !located.isApproximate, beacon?.name == refiningName {
-                        beacon = Beacon(name: refiningName, position: located.position, isApproximate: false)
-                    }
-                } else {
-                    announceHazard(try await GeminiClient.nearestHazard(in: snapshot.jpeg))
-                }
+                announceHazard(try await GeminiClient.nearestHazard(in: snapshot.jpeg))
             } catch GeminiClient.Failure.quota(let retryAfter) {
                 // Background naming is optional; just stop asking until the quota resets.
                 geminiPausedUntil = Date().addingTimeInterval(retryAfter)
@@ -793,15 +483,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard let alert, alert.distance >= stopDistance,
               !object.isEmpty, object.count < 25, !object.lowercased().hasPrefix("none")
         else { return }
-        let direction = directionWord(alert.zone)
         let name = "\(object.prefix(1).uppercased())\(object.dropFirst().lowercased())"
-        let hazard: String
-        if profile?.verbosity == .brief {
-            hazard = BlindSpotNav.obstaclePhrase(description: "\(name) \(direction)")
-        } else {
-            let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-            hazard = BlindSpotNav.obstaclePhrase(description: "\(name) \(direction), \(detail)")
-        }
+        let hazard = callout(name, alert)
         let now = Date()
         if hazard == lastHazard, now.timeIntervalSince(lastHazardTime) < 10 { return }
         if say(hazard) {
@@ -809,6 +492,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             lastHazardTime = now
             lastAnnouncedZone = alert.zone
             lastAnnouncedDistance = alert.distance
+            lastAnnouncedName = name
             lastAnnouncement = now
         }
     }
@@ -834,7 +518,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Helpers
 
-    /// JPEG encoding and copying the depth map take tens of milliseconds, so they run off the main thread.
+    /// JPEG encoding takes tens of milliseconds, so it runs off the main thread.
     private func captureSnapshot() async -> FrameSnapshot? {
         guard let frame = session.currentFrame else { return nil }
         return await Task.detached(priority: .userInitiated) { FrameSnapshot(frame: frame) }.value
@@ -845,8 +529,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         // Quiet mode mutes safety callouts (handled in speakWarnings). Replies to "Firefly, …" still speak.
         guard speaker.say(text, pan: 0, interrupt: interrupt, allowNetwork: allowNetwork) else { return false }
         caption = text
-        lastSpokeQuestion = text.hasSuffix("?")
-        replyDeadline = .distantPast
         lastVoice = Date()
         isSpeaking = true
         listener.setPaused(true)
@@ -869,13 +551,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             self.isSpeaking = false
-            if self.lastSpokeQuestion, self.phase == .ready {
-                self.replyDeadline = Date().addingTimeInterval(self.replyWindow)
-            }
             if !self.handlingUtterance {
                 self.listener.setPaused(false)
             }
-            if self.mood == .listening { self.mood = self.guideMode == .navigate ? .guiding : .idle }
+            if self.mood == .listening { self.mood = .idle }
         }
     }
 }
