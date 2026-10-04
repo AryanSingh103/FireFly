@@ -99,6 +99,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var healthTask: Task<Void, Never>?
     /// Set when the wearer says "Firefly" over Firefly; callouts hold off so they don't talk over the request.
     private var awaitingRequestUntil = Date.distantPast
+    /// True when ARKit scene depth (LiDAR) is available; otherwise monocular CV estimates distance.
+    private var usesLiDAR = false
+    /// Environment learning — off by default; kept alive so the groundwork compiles and can be flipped on later.
+    let environmentMemory = EnvironmentMemory()
 
     override init() {
         super.init()
@@ -113,11 +117,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func start() {
-        guard ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) else {
-            status = "This iPhone has no LiDAR"
-            caption = status
-            return
-        }
+        usesLiDAR = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        SceneAI.startMonitoring()
 
         AVAudioSession.sharedInstance().requestRecordPermission { @Sendable _ in }
         SFSpeechRecognizer.requestAuthorization { @Sendable _ in }
@@ -125,7 +126,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         session.delegate = self
         session.delegateQueue = frameQueue
         runSession()
-        status = "Scanning"
+        status = usesLiDAR ? "Scanning" : "Scanning (camera distance)"
         startFlipMonitor()
         listener.start()
         startHealthCheck()
@@ -138,7 +139,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func runSession() {
         let configuration = ARWorldTrackingConfiguration()
-        configuration.frameSemantics = .sceneDepth
+        if usesLiDAR {
+            configuration.frameSemantics = .sceneDepth
+        }
         session.run(configuration)
         lastSessionRun = Date()
     }
@@ -209,11 +212,21 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         // limit (it was 50 ms) dropped every frame once the phone got busy: delivery alone can take longer,
         // and then there were no beeps, callouts or heat map at all.
         if let latest = session.currentFrame, latest.timestamp > frame.timestamp { return }
-        guard let depth = frame.sceneDepth else { return }
-        let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
-        var preview: DebugPreview?
+
         let now = Date()
-        if now.timeIntervalSince(lastPreviewTime) >= Self.previewInterval {
+        let reading: DepthReading
+        if let depth = frame.sceneDepth {
+            reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
+        } else if now.timeIntervalSince(lastPreviewTime) >= 0.2 {
+            // Non-LiDAR: Vision CV is heavier than depth — throttle a bit.
+            lastPreviewTime = now
+            reading = MonocularDistanceEstimator.nearestPerZone(in: frame)
+        } else {
+            return
+        }
+
+        var preview: DebugPreview?
+        if now.timeIntervalSince(lastPreviewTime) >= Self.previewInterval || frame.sceneDepth == nil {
             lastPreviewTime = now
             preview = DebugPreview(frame: frame, points: reading.points)
         }
@@ -226,8 +239,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             lastNamingTime = now
             named = (nearest, ObstacleNamer.name(in: frame, at: point))
         }
+        let distances = reading.distances
         Task { @MainActor in
-            self.ingest(reading.distances)
+            self.ingest(distances)
+            self.environmentMemory.ingest(frame: frame, distances: distances)
             if let preview { self.preview = preview }
             if let named {
                 if let name = named.name {
@@ -502,26 +517,19 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func describeScene(prompt: String) async {
         mood = .thinking
-        guard let snapshot = await captureSnapshot() else { return }
-        do {
-            let reply = try await GeminiClient.answer(prompt, in: snapshot.jpeg)
-            say(reply.isEmpty ? "I'm not sure what's there." : reply, interrupt: true)
-        } catch {
-            say(geminiProblem(error), interrupt: true)
+        guard let snapshot = await captureSnapshot() else {
+            // No frame JPEG — still try a pure on-device street answer if relevant.
+            if let frame = session.currentFrame,
+               StreetContextAnalyzer.looksLikeStreetQuestion(prompt.lowercased()),
+               let local = StreetContextAnalyzer.scan(frame).spokenAnswer(for: prompt) {
+                say(local, interrupt: true, allowNetwork: false)
+            } else {
+                say("I'm not sure what's there.", interrupt: true, allowNetwork: false)
+            }
+            return
         }
-    }
-
-    /// What to say when a Gemini request fails. Only a real network failure is called "no connection".
-    private func geminiProblem(_ error: Error) -> String {
-        switch error as? GeminiClient.Failure {
-        case .offline:
-            return "I can't reach the internet right now, but I'm still watching for obstacles."
-        case .quota(let retryAfter):
-            geminiPausedUntil = Date().addingTimeInterval(retryAfter)
-            return "I've used up my AI requests for now, but I'm still watching for obstacles."
-        default:
-            return "Something went wrong asking the AI, but I'm still watching for obstacles."
-        }
+        let reply = await SceneAI.answer(prompt, jpeg: snapshot.jpeg, frame: session.currentFrame)
+        say(reply.isEmpty ? "I'm not sure what's there." : reply, interrupt: true)
     }
 
     // MARK: - Gemini naming (only for what the phone couldn't name)
@@ -538,7 +546,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             defer { sceneRequestActive = false }
             guard let snapshot = await captureSnapshot() else { return }
             do {
-                announceHazard(try await GeminiClient.nearestHazard(in: snapshot.jpeg))
+                announceHazard(try await SceneAI.nearestHazard(jpeg: snapshot.jpeg, frame: session.currentFrame))
             } catch GeminiClient.Failure.quota(let retryAfter) {
                 // Background naming is optional; just stop asking until the quota resets.
                 geminiPausedUntil = Date().addingTimeInterval(retryAfter)

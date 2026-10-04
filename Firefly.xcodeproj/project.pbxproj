@@ -24,6 +24,11 @@
 		A1000000000000000000000E /* VoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* VoiceRecorder.swift */; };
 		A10000000000000000000013 /* UserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* UserProfile.swift */; };
 		A10000000000000000000014 /* AlwaysListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* AlwaysListener.swift */; };
+		A10000000000000000000021 /* SceneAI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000021 /* SceneAI.swift */; };
+		A10000000000000000000022 /* GemmaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* GemmaClient.swift */; };
+		A10000000000000000000023 /* MonocularDistanceEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* MonocularDistanceEstimator.swift */; };
+		A10000000000000000000024 /* StreetContextAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* StreetContextAnalyzer.swift */; };
+		A10000000000000000000025 /* EnvironmentMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* EnvironmentMemory.swift */; };
 		A1000000000000000000000F /* Phrases in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* Phrases */; };
 		A10000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -46,6 +51,11 @@
 		B1000000000000000000000E /* VoiceRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		B10000000000000000000013 /* UserProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfile.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* AlwaysListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlwaysListener.swift; sourceTree = "<group>"; };
+		B10000000000000000000021 /* SceneAI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneAI.swift; sourceTree = "<group>"; };
+		B10000000000000000000022 /* GemmaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GemmaClient.swift; sourceTree = "<group>"; };
+		B10000000000000000000023 /* MonocularDistanceEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonocularDistanceEstimator.swift; sourceTree = "<group>"; };
+		B10000000000000000000024 /* StreetContextAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreetContextAnalyzer.swift; sourceTree = "<group>"; };
+		B10000000000000000000025 /* EnvironmentMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentMemory.swift; sourceTree = "<group>"; };
 		B1000000000000000000000F /* Phrases */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Phrases; sourceTree = "<group>"; };
 		B10000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -78,11 +88,16 @@
 				B10000000000000000000003 /* ContentView.swift */,
 				B10000000000000000000006 /* FireflyEngine.swift */,
 				B10000000000000000000004 /* DepthZoneAnalyzer.swift */,
+				B10000000000000000000023 /* MonocularDistanceEstimator.swift */,
 				B10000000000000000000012 /* DebugPreview.swift */,
 				B10000000000000000000020 /* ObstacleNamer.swift */,
+				B10000000000000000000024 /* StreetContextAnalyzer.swift */,
 				B10000000000000000000001 /* AlertPolicy.swift */,
 				B10000000000000000000007 /* FrameSnapshot.swift */,
+				B10000000000000000000021 /* SceneAI.swift */,
 				B10000000000000000000008 /* GeminiClient.swift */,
+				B10000000000000000000022 /* GemmaClient.swift */,
+				B10000000000000000000025 /* EnvironmentMemory.swift */,
 				B10000000000000000000009 /* HapticPulser.swift */,
 				B1000000000000000000000D /* TonePlayer.swift */,
 				B1000000000000000000000B /* Speaker.swift */,
@@ -185,6 +200,11 @@
 				A10000000000000000000006 /* FireflyEngine.swift in Sources */,
 				A10000000000000000000007 /* FrameSnapshot.swift in Sources */,
 				A10000000000000000000008 /* GeminiClient.swift in Sources */,
+				A10000000000000000000021 /* SceneAI.swift in Sources */,
+				A10000000000000000000022 /* GemmaClient.swift in Sources */,
+				A10000000000000000000023 /* MonocularDistanceEstimator.swift in Sources */,
+				A10000000000000000000024 /* StreetContextAnalyzer.swift in Sources */,
+				A10000000000000000000025 /* EnvironmentMemory.swift in Sources */,
 				A10000000000000000000009 /* HapticPulser.swift in Sources */,
 				A1000000000000000000000A /* Secrets.swift in Sources */,
 				A1000000000000000000000B /* Speaker.swift in Sources */,

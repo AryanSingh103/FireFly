@@ -22,6 +22,6 @@ echo
 echo "Next:"
 echo "  1. Open Firefly.xcodeproj"
 echo "  2. Signing & Capabilities → select your Team"
-echo "  3. Plug in the LiDAR iPhone, pick it as the run destination, hit Run"
-echo "  4. First test: chair on LEFT should light LEFT column + left-ear beep"
+echo "  3. Plug in an iPhone, pick it as the run destination, hit Run"
+echo "  4. First test: chair ahead should speed up haptics; say “Firefly, what's in front of me?”"
 open Firefly.xcodeproj
