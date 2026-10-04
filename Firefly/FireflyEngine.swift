@@ -80,13 +80,17 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var flipWarned = false
     private var handlingUtterance = false
     private var speechWatchTask: Task<Void, Never>?
+    /// When the speaker last started being busy. If it never finishes (a stuck player or fetch), every
+    /// callout is refused and the mic stays paused, so it gets reset.
+    private var speakingSince: Date?
+    private let maxSpeakingTime: TimeInterval = 12
 
     override init() {
         super.init()
         // No setup questions: start with standard settings, changed later by voice ("Firefly, use metric").
-        let saved = UserProfile.load() ?? .standard
-        profile = saved
-        quietMode = saved.quietByDefault
+        // Always start speaking. Quiet mode is only for the session it's turned on in; an old setup could
+        // have saved it as the default and silenced every beep and callout.
+        profile = UserProfile.load() ?? .standard
         listener.onUtterance = { [weak self] text in
             Task { @MainActor in self?.handleUtterance(text) }
         }
@@ -221,6 +225,16 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             }
             pulseCount += 1
             if alert.distance < stopDistance { mood = .danger }
+        }
+
+        if speaker.isSpeaking {
+            speakingSince = speakingSince ?? now
+            if now.timeIntervalSince(speakingSince ?? now) > maxSpeakingTime {
+                speaker.stop()
+                speakingSince = nil
+            }
+        } else {
+            speakingSince = nil
         }
 
         let speaking = speaker.isSpeaking
