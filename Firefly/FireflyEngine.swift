@@ -454,7 +454,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let lowered = text.lowercased()
         switch onboardingStep {
         case 0:
-            draft.name = Self.name(from: text)
+            guard let name = Self.name(from: text) else {
+                say("Sorry, I didn't catch your name. What should I call you?", interrupt: true)
+                return
+            }
+            draft.name = name
             onboardingStep = 1
             say("Nice to meet you, \(draft.name). Do you want brief updates, or normal detail?", interrupt: true)
         case 1:
@@ -490,8 +494,14 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    /// "My name is Aryan." -> "Aryan"
-    private static func name(from text: String) -> String {
+    /// Words that are never a name; usually the mic caught Firefly's own question or a filler word.
+    private static let notNames: Set<String> = [
+        "what", "what's", "whats", "your", "name", "my", "is", "the", "a", "firefly", "hi", "hey", "hello",
+        "um", "uh", "okay", "ok", "yes", "no", "first", "sorry", "i", "it", "it's", "you", "help", "get", "around",
+    ]
+
+    /// "My name is Aryan." -> "Aryan". nil if what was heard doesn't look like a name.
+    private static func name(from text: String) -> String? {
         var rest = text.lowercased()
         for lead in ["my name is ", "my name's ", "i'm ", "i am ", "it's ", "it is ", "call me ", "this is ", "hi ", "hey "]
         where rest.hasPrefix(lead) {
@@ -499,7 +509,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
         let word = rest.split(separator: " ").first.map(String.init) ?? rest
         let letters = word.trimmingCharacters(in: CharacterSet.letters.inverted)
-        guard !letters.isEmpty else { return text }
+        guard !letters.isEmpty, !notNames.contains(letters.lowercased()) else { return nil }
         return letters.prefix(1).uppercased() + letters.dropFirst()
     }
 

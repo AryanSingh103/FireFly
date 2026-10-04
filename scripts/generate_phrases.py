@@ -49,6 +49,7 @@ EXTRAS = [
     "I'm here. Where do you want to go?",
     "Hi, I'm Firefly. I'll help you get around. Where would you like to go?",
     "Hi, I'm Firefly. I'll help you get around. First, what's your name?",
+    "Sorry, I didn't catch your name. What should I call you?",
     "Start nav?",
     "Say yes to start nav, or no to cancel.",
     "Closing Firefly.",

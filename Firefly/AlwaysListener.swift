@@ -24,10 +24,11 @@ final class AlwaysListener: NSObject {
     private var silenceTask: Task<Void, Never>?
     private let endOfSpeechDelay: UInt64 = 1_000_000_000
 
+    /// Leaves `paused` alone: coming back to the foreground while Firefly is talking must not reopen the
+    /// mic, or it hears its own question and treats it as the answer.
     func start() {
         enabled = true
-        paused = false
-        beginSession()
+        if !paused { beginSession() }
     }
 
     func stop() {
@@ -35,16 +36,19 @@ final class AlwaysListener: NSObject {
         endSession()
     }
 
-    /// Pause while Firefly speaks so it doesn't hear itself.
+    /// Pause while Firefly speaks so it doesn't hear itself. Resuming waits a moment so the tail of
+    /// Firefly's own voice (and the room's echo of it) isn't picked up.
     func setPaused(_ paused: Bool) {
         guard paused != self.paused else { return }
         self.paused = paused
         if paused {
             endSession()
         } else if enabled {
-            beginSession()
+            scheduleRestart(after: resumeDelay)
         }
     }
+
+    private let resumeDelay: UInt64 = 400_000_000
 
     private func beginSession() {
         endSession()
