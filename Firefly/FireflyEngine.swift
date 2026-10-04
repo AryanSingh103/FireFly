@@ -27,6 +27,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var profile: UserProfile?
     @Published private(set) var preview: DebugPreview?
     @Published private(set) var lastHeard = ""
+    /// Depth frames per second: delivered by ARKit / used by the obstacle loop. Shown on screen so a stalled
+    /// loop is visible at a glance.
+    @Published private(set) var frameRates = ""
 
     /// Shared with the live camera view in ContentView.
     let session = ARSession()
@@ -73,8 +76,15 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var flipWarned = false
     private var handlingUtterance = false
     private var speechWatchTask: Task<Void, Never>?
-    /// For the health check: when the last depth frame arrived, and since when a question has been worked on.
-    private var lastFrameAt = Date()
+    /// For the health check: when ARKit last delivered any frame (system uptime; written on frameQueue,
+    /// read on the main actor, and a slightly stale read is harmless), and when the session was last started.
+    private nonisolated(unsafe) var lastFrameUptime: TimeInterval = 0
+    private var lastSessionRun = Date.distantPast
+    /// Frame counters for frameRates. deliveredFrames is counted on frameQueue and reset on the main actor;
+    /// an occasional lost count is fine for an on-screen rate.
+    private nonisolated(unsafe) var deliveredFrames = 0
+    private var usedFrames = 0
+    /// Since when a question has been worked on.
     private var handlingSince: Date?
     private var isForeground = true
     private var healthTask: Task<Void, Never>?
@@ -121,12 +131,12 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let configuration = ARWorldTrackingConfiguration()
         configuration.frameSemantics = .sceneDepth
         session.run(configuration)
-        lastFrameAt = Date()
+        lastSessionRun = Date()
     }
 
     /// Runs once a second, outside the frame loop, so it still runs if frames stop. Brings back anything
     /// that would otherwise leave Firefly silent for good: depth frames that stopped arriving, a question
-    /// that never finished (which kept beeps, callouts and the mic switched off), and the audio session.
+    /// that never finished (which kept beeps, callouts and the mic switched off), and a closed mic.
     private func startHealthCheck() {
         healthTask?.cancel()
         healthTask = Task { @MainActor [weak self] in
@@ -140,8 +150,14 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private func checkHealth() {
         guard isForeground else { return }
         let now = Date()
-        if now.timeIntervalSince(lastFrameAt) > 2 {
-            status = "Restarting the camera"
+        frameRates = "Depth \(deliveredFrames)/s · used \(usedFrames)/s"
+        deliveredFrames = 0
+        usedFrames = 0
+        // Only for a camera that has truly stopped. ARKit takes a few seconds to start, frames under load
+        // can be dropped as stale, and restarting it every couple of seconds kept the camera from ever
+        // starting (no beeps, no heat map). So: no frame of any kind for 8 s, at most once per 15 s.
+        let sinceFrame = ProcessInfo.processInfo.systemUptime - lastFrameUptime
+        if sinceFrame > 8, now.timeIntervalSince(lastSessionRun) > 15 {
             runSession()
         }
         if let handlingSince, now.timeIntervalSince(handlingSince) > 20 {
@@ -151,7 +167,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             if mood == .thinking { mood = .idle }
             syncListener()
         }
-        tones.keepSessionActive()
         if !handlingUtterance {
             syncListener()
             listener.ensureRunning()
@@ -162,7 +177,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     /// the audio session, and the listener kept retrying it.
     func setForeground(_ foreground: Bool) {
         isForeground = foreground
-        lastFrameAt = Date()
+        // The camera pauses in the background; give it time to come back before judging it stopped.
+        if foreground { lastSessionRun = Date() }
         if foreground {
             listener.start()
         } else {
@@ -177,9 +193,13 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     /// immediately; only small values cross to the main actor. (Doing this on the main queue let frames
     /// pile up behind UI work and ARKit warned it would stop delivering camera images.)
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        // If this queue fell behind, skip stale frames so ARKit gets them back at once instead of
-        // queueing up (ARKit stops the camera if too many are held).
-        guard ProcessInfo.processInfo.systemUptime - frame.timestamp < 0.05 else { return }
+        lastFrameUptime = ProcessInfo.processInfo.systemUptime
+        deliveredFrames += 1
+        // If this queue fell behind, skip frames that a newer one has already replaced, so ARKit gets them
+        // back at once instead of queueing up (ARKit stops the camera if too many are held). A fixed age
+        // limit (it was 50 ms) dropped every frame once the phone got busy: delivery alone can take longer,
+        // and then there were no beeps, callouts or heat map at all.
+        if let latest = session.currentFrame, latest.timestamp > frame.timestamp { return }
         guard let depth = frame.sceneDepth else { return }
         let reading = DepthZoneAnalyzer.nearestPerZone(in: depth)
         var preview: DebugPreview?
@@ -218,8 +238,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Safety loop
 
     private func ingest(_ reading: SIMD3<Float>) {
-        lastFrameAt = Date()
-        if status == "Restarting the camera" { status = "Scanning" }
+        usedFrames += 1
         history.append(reading)
         if history.count > smoothingFrames { history.removeFirst() }
         distances = history.reduce(SIMD3<Float>(repeating: 0), +) / Float(history.count)

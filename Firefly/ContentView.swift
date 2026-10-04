@@ -45,7 +45,8 @@ struct ContentView: View {
 
     private var statusLine: String {
         let mode = engine.isHandling ? "Thinking" : "Watching · say “Firefly …”"
-        return engine.quietMode ? "Quiet · haptics only · \(mode)" : mode
+        let line = engine.quietMode ? "Quiet · haptics only · \(mode)" : mode
+        return engine.frameRates.isEmpty ? line : "\(line)\n\(engine.frameRates)"
     }
 }
 
