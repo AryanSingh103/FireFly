@@ -45,7 +45,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let arrivalDistance: Float = 1.2
     /// Automatic obstacle naming. Each call costs one Gemini request, and free-tier keys get very few per day.
     private let sceneInterval: TimeInterval = 10
-    private let heartbeatInterval: TimeInterval = 1.1
+    /// Slow enough to clearly differ from the slowest obstacle rate (about 0.7 s at 2 m).
+    private let heartbeatInterval: TimeInterval = 1.2
+    private let pulseStrength: Float = 1.0
     /// Set when Gemini answers 429; automatic calls stop until then.
     private var geminiPausedUntil = Date.distantPast
     private nonisolated static let previewInterval: TimeInterval = 0.12
@@ -208,20 +210,21 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let inDanger = (alert?.distance ?? .infinity) < dangerDistance
         maps.setPausedForObstacle((inDanger && maps.isNavigating) || maps.isInInitialNavPhase)
 
-        // Something within speaking range is "in the path": fast pulses and beeps. Anything farther
-        // (or nothing at all) gets a steady heartbeat, so the wearer can feel Firefly is still working.
+        // One strong pulse everywhere; only its rate changes. A clear path pulses slowly and steadily so the
+        // wearer can feel Firefly is working, and an obstacle in the path (within speaking range) speeds it up
+        // as it gets closer, with a beep.
         let inPath = (alert?.distance ?? .infinity) < announceDistance
         if !inPath {
             if now.timeIntervalSince(lastPulse) >= heartbeatInterval {
                 lastPulse = now
-                haptics.heartbeat()
+                haptics.pulse(intensity: pulseStrength)
             }
         } else if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
             lastPulse = now
             if quietMode, alert.distance < stopDistance {
                 haptics.urgentStop()
             } else {
-                haptics.pulse(intensity: alert.intensity)
+                haptics.pulse(intensity: pulseStrength)
             }
             if !quietMode, phase != .handling, beacon == nil || inDanger {
                 tones.beep(pan: 0)

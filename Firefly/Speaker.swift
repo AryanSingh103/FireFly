@@ -37,8 +37,12 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
     private var queuedClips: [URL] = []
     private var queuedPan: Float = 0
 
+    /// True while a live ElevenLabs line is being fetched, so other lines wait instead of cutting in front
+    /// and causing the fetched audio to be thrown away.
+    private var fetching = false
+
     var isSpeaking: Bool {
-        player?.isPlaying == true || synthesizer.isSpeaking || !queuedClips.isEmpty
+        player?.isPlaying == true || synthesizer.isSpeaking || !queuedClips.isEmpty || fetching
     }
 
     /// Plays a bundled clip if one matches the text, then a run of bundled clips if every comma-separated
@@ -66,9 +70,11 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
             synthesizer.speak(AVSpeechUtterance(string: text))
             return true
         }
+        fetching = true
         Task {
             let data = try? await TTSClient.synthesize(text)
-            guard id == self.requestID, !self.isSpeaking else { return }
+            guard id == self.requestID else { return }
+            self.fetching = false
             if let data, self.start(try? AVAudioPlayer(data: data), pan: pan) { return }
             self.synthesizer.speak(AVSpeechUtterance(string: text))
         }
@@ -77,6 +83,7 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
 
     func stop() {
         requestID += 1
+        fetching = false
         queuedClips = []
         player?.stop()
         synthesizer.stopSpeaking(at: .immediate)
