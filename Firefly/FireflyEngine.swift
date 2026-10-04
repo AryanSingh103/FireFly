@@ -48,6 +48,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     /// Slow enough to clearly differ from the slowest obstacle rate (about 0.7 s at 2 m).
     private let heartbeatInterval: TimeInterval = 1.2
     private let pulseStrength: Float = 1.0
+    /// Within this distance (about 3 ft) the continuous surface buzz runs.
+    private let surfaceRange: Float = 0.9
+    /// Side rhythms last up to 0.3 s; repeating faster than this blurs them together.
+    private let minimumRhythmInterval: TimeInterval = 0.35
     /// Set when Gemini answers 429; automatic calls stop until then.
     private var geminiPausedUntil = Date.distantPast
     private nonisolated static let previewInterval: TimeInterval = 0.12
@@ -137,7 +141,20 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             listener.stop()
             speaker.stop()
+            haptics.stopSurface()
         }
+    }
+
+    /// 0 at the edge of the surface range, 1 at 0.3 m; nil when farther than the range.
+    private func surfaceCloseness(_ distance: Float) -> Float? {
+        guard distance < surfaceRange else { return nil }
+        return 1 - min(max((distance - 0.3) / (surfaceRange - 0.3), 0), 1)
+    }
+
+    /// Repeat rate for the side rhythm. Inside the surface range the buzz shows closeness, so the rhythm
+    /// keeps a steady, readable pace there.
+    private func rhythmInterval(for alert: ObstacleAlert) -> TimeInterval {
+        alert.zone == .center && alert.distance < surfaceRange ? 0.55 : max(alert.interval, minimumRhythmInterval)
     }
 
     // MARK: - ARKit
@@ -199,21 +216,25 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         let inDanger = (alert?.distance ?? .infinity) < dangerDistance
         maps.setPausedForObstacle((inDanger && maps.isNavigating) || maps.isInInitialNavPhase)
 
-        // One strong pulse everywhere; only its rate changes. A clear path pulses slowly and steadily so the
-        // wearer can feel Firefly is working, and an obstacle in the path (within speaking range) speeds it up
-        // as it gets closer, with a beep.
+        // Haptics alone say where and how close, so quiet mode works by touch:
+        // - clear path: one slow, steady tap so the wearer feels Firefly is working;
+        // - obstacle in the path: a rhythm for its side (see HapticPulser.directional) that repeats faster
+        //   as it gets closer, with a soft beep;
+        // - the last stretch before something ahead: a continuous buzz that strengthens as you approach.
         let inPath = (alert?.distance ?? .infinity) < announceDistance
+        // Only for something straight ahead: a wall beside you in a hallway shouldn't buzz the whole way.
+        haptics.setSurface(closeness: alert.flatMap { $0.zone == .center ? surfaceCloseness($0.distance) : nil })
         if !inPath {
             if now.timeIntervalSince(lastPulse) >= heartbeatInterval {
                 lastPulse = now
                 haptics.pulse(intensity: pulseStrength)
             }
-        } else if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
+        } else if let alert, now.timeIntervalSince(lastPulse) >= rhythmInterval(for: alert) {
             lastPulse = now
             if quietMode, alert.distance < stopDistance {
                 haptics.urgentStop()
             } else {
-                haptics.pulse(intensity: pulseStrength)
+                haptics.directional(alert.zone, intensity: pulseStrength)
             }
             if !quietMode, phase != .handling, beacon == nil || inDanger {
                 tones.beep(pan: 0)
