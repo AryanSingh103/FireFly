@@ -12,7 +12,7 @@ final class TonePlayer {
 
     init() {
         beepData = TonePlayer.render(duration: 0.06) { time, progress in
-            sin(2 * Float.pi * 880 * time) * sin(Float.pi * progress) * 0.6
+            sin(2 * Float.pi * 880 * time) * sin(Float.pi * progress) * 0.55
         }
         chimeData = TonePlayer.render(duration: 0.35) { time, progress in
             let bell = sin(2 * Float.pi * 1320 * time) + 0.4 * sin(2 * Float.pi * 1980 * time)
@@ -26,7 +26,6 @@ final class TonePlayer {
 
         beepPlayer = try? AVAudioPlayer(data: beepData)
         chimePlayer = try? AVAudioPlayer(data: chimeData)
-        beepPlayer?.volume = 1.0
         beepPlayer?.prepareToPlay()
         chimePlayer?.prepareToPlay()
     }
@@ -39,12 +38,21 @@ final class TonePlayer {
         play(chimePlayer, pan: pan)
     }
 
+    /// Re-activates the audio session. A phone call, Siri or another app can deactivate it, and then every
+    /// beep and spoken line fails silently until it is active again.
+    func keepSessionActive() {
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
     private func play(_ player: AVAudioPlayer?, pan: Float) {
         guard let player else { return }
         player.stop()
         player.currentTime = 0
         player.pan = pan
-        player.play()
+        if !player.play() {
+            keepSessionActive()
+            player.play()
+        }
     }
 
     private static func render(duration: Double, sample: (_ time: Float, _ progress: Float) -> Float) -> Data {

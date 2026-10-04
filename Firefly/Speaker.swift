@@ -40,6 +40,10 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
     /// True while a live ElevenLabs line is being fetched, so other lines wait instead of cutting in front
     /// and causing the fetched audio to be thrown away.
     private var fetching = false
+    /// When the current stretch of speaking began, to catch a player that never reports finishing.
+    private var busySince: Date?
+    /// Longer than any real reply (Gemini answers are kept under 18 words).
+    private let stuckAfter: TimeInterval = 30
 
     var isSpeaking: Bool {
         player?.isPlaying == true || synthesizer.isSpeaking || !queuedClips.isEmpty || fetching
@@ -81,9 +85,28 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         return true
     }
 
+    /// Called every frame. A clip that ends without its finish callback (an audio interruption, for
+    /// example) left the rest of a stitched line queued, so the speaker looked busy forever: every line
+    /// was refused and the mic stayed paused, and Firefly stopped answering.
+    func recoverIfStuck() {
+        let playing = player?.isPlaying == true || synthesizer.isSpeaking || fetching
+        if !queuedClips.isEmpty, !playing {
+            let next = queuedClips.removeFirst()
+            if !start(try? AVAudioPlayer(contentsOf: next), pan: queuedPan) { queuedClips = [] }
+        }
+        guard isSpeaking else {
+            busySince = nil
+            return
+        }
+        let since = busySince ?? Date()
+        busySince = since
+        if Date().timeIntervalSince(since) > stuckAfter { stop() }
+    }
+
     func stop() {
         requestID += 1
         fetching = false
+        busySince = nil
         queuedClips = []
         player?.stop()
         synthesizer.stopSpeaking(at: .immediate)

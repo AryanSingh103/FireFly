@@ -24,8 +24,8 @@ struct UserProfile: Codable, Equatable {
 
     static let storageKey = "firefly.userProfile"
 
-    /// What Firefly uses until changed by voice: normal detail, steps and feet, normal pace, speaking.
-    static let standard = UserProfile(name: "", verbosity: .normal, units: .stepsFirst, pace: .normal, quietByDefault: false)
+    /// What Firefly always starts with; there are no setup questions. Feet first, normal detail and pace, speaking.
+    static let standard = UserProfile(name: "", verbosity: .normal, units: .distanceFirst, pace: .normal, quietByDefault: false)
 
     static func load() -> UserProfile? {
         guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
@@ -67,3 +67,4 @@ struct UserProfile: Codable, Equatable {
         max(1, Int((meters * 3.281).rounded()))
     }
 }
+

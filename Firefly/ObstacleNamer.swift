@@ -8,7 +8,7 @@ enum ObstacleNamer {
     /// Fraction of the upright image, in each direction, looked at around the obstacle.
     static let cropSize: CGFloat = 0.35
     /// The classifier scores each label independently; below this it is guessing.
-    static let minimumConfidence: Float = 0.15
+    static let minimumConfidence: Float = 0.25
 
     /// Vision identifier -> what Firefly says. Names must match OBJECTS in scripts/generate_phrases.py.
     static let spokenNames: [String: String] = [
@@ -53,7 +53,7 @@ enum ObstacleNamer {
             return nil
         }
 
-        if let people = humans.results, people.contains(where: { $0.confidence > 0.3 && $0.boundingBox.intersects(crop) }) {
+        if let people = humans.results, people.contains(where: { $0.confidence > 0.5 && $0.boundingBox.intersects(crop) }) {
             return "Person"
         }
         for observation in classify.results ?? [] where observation.confidence >= minimumConfidence {

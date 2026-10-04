@@ -41,13 +41,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let announceDistance: Float = 2.0
     /// Automatic obstacle naming. Each call costs one Gemini request, and free-tier keys get very few per day.
     private let sceneInterval: TimeInterval = 10
-    /// Slow enough to clearly differ from the slowest obstacle rate (about 0.7 s at 2 m).
-    private let heartbeatInterval: TimeInterval = 1.2
-    private let pulseStrength: Float = 1.0
-    /// Within this distance (about 3 ft) the continuous surface buzz runs.
-    private let surfaceRange: Float = 0.9
-    /// Side rhythms last up to 0.3 s; repeating faster than this blurs them together.
-    private let minimumRhythmInterval: TimeInterval = 0.35
+    private let heartbeatInterval: TimeInterval = 1.1
     /// Set when Gemini answers 429; automatic calls stop until then.
     private var geminiPausedUntil = Date.distantPast
     private nonisolated static let previewInterval: TimeInterval = 0.12
@@ -71,7 +65,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var lastVoice = Date.distantPast
     private var lastAnnouncement = Date.distantPast
     private var lastAnnouncedZone: Zone?
-    private var lastAnnouncedDistance: Float = .infinity
     private var wasClose = false
     private var lastSceneRequest = Date.distantPast
     private var sceneRequestActive = false
@@ -80,19 +73,23 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var flipWarned = false
     private var handlingUtterance = false
     private var speechWatchTask: Task<Void, Never>?
-    /// When the speaker last started being busy. If it never finishes (a stuck player or fetch), every
-    /// callout is refused and the mic stays paused, so it gets reset.
-    private var speakingSince: Date?
-    private let maxSpeakingTime: TimeInterval = 12
+    /// For the health check: when the last depth frame arrived, and since when a question has been worked on.
+    private var lastFrameAt = Date()
+    private var handlingSince: Date?
+    private var isForeground = true
+    private var healthTask: Task<Void, Never>?
+    /// Set when the wearer says "Firefly" over Firefly; callouts hold off so they don't talk over the request.
+    private var awaitingRequestUntil = Date.distantPast
 
     override init() {
         super.init()
-        // No setup questions: start with standard settings, changed later by voice ("Firefly, use metric").
-        // Always start speaking. Quiet mode is only for the session it's turned on in; an old setup could
-        // have saved it as the default and silenced every beep and callout.
-        profile = UserProfile.load() ?? .standard
+        // No setup questions: always start with standard settings (feet first, speaking).
+        profile = .standard
         listener.onUtterance = { [weak self] text in
             Task { @MainActor in self?.handleUtterance(text) }
+        }
+        listener.onWake = { [weak self] in
+            Task { @MainActor in self?.interruptedByWearer() }
         }
     }
 
@@ -106,14 +103,13 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         AVAudioSession.sharedInstance().requestRecordPermission { @Sendable _ in }
         SFSpeechRecognizer.requestAuthorization { @Sendable _ in }
 
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.frameSemantics = .sceneDepth
         session.delegate = self
         session.delegateQueue = frameQueue
-        session.run(configuration)
+        runSession()
         status = "Scanning"
         startFlipMonitor()
         listener.start()
+        startHealthCheck()
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 800_000_000)
@@ -121,28 +117,58 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    private func runSession() {
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.frameSemantics = .sceneDepth
+        session.run(configuration)
+        lastFrameAt = Date()
+    }
+
+    /// Runs once a second, outside the frame loop, so it still runs if frames stop. Brings back anything
+    /// that would otherwise leave Firefly silent for good: depth frames that stopped arriving, a question
+    /// that never finished (which kept beeps, callouts and the mic switched off), and the audio session.
+    private func startHealthCheck() {
+        healthTask?.cancel()
+        healthTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.checkHealth()
+            }
+        }
+    }
+
+    private func checkHealth() {
+        guard isForeground else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastFrameAt) > 2 {
+            status = "Restarting the camera"
+            runSession()
+        }
+        if let handlingSince, now.timeIntervalSince(handlingSince) > 20 {
+            self.handlingSince = nil
+            handlingUtterance = false
+            isHandling = false
+            if mood == .thinking { mood = .idle }
+            syncListener()
+        }
+        tones.keepSessionActive()
+        if !handlingUtterance {
+            syncListener()
+            listener.ensureRunning()
+        }
+    }
+
     /// Called when the app moves between foreground and background. In the background iOS refuses
     /// the audio session, and the listener kept retrying it.
     func setForeground(_ foreground: Bool) {
+        isForeground = foreground
+        lastFrameAt = Date()
         if foreground {
             listener.start()
         } else {
             listener.stop()
             speaker.stop()
-            haptics.stopSurface()
         }
-    }
-
-    /// 0 at the edge of the surface range, 1 at 0.3 m; nil when farther than the range.
-    private func surfaceCloseness(_ distance: Float) -> Float? {
-        guard distance < surfaceRange else { return nil }
-        return 1 - min(max((distance - 0.3) / (surfaceRange - 0.3), 0), 1)
-    }
-
-    /// Repeat rate for the side rhythm. Inside the surface range the buzz shows closeness, so the rhythm
-    /// keeps a steady, readable pace there.
-    private func rhythmInterval(for alert: ObstacleAlert) -> TimeInterval {
-        alert.zone == .center && alert.distance < surfaceRange ? 0.55 : max(alert.interval, minimumRhythmInterval)
     }
 
     // MARK: - ARKit
@@ -192,6 +218,8 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Safety loop
 
     private func ingest(_ reading: SIMD3<Float>) {
+        lastFrameAt = Date()
+        if status == "Restarting the camera" { status = "Scanning" }
         history.append(reading)
         if history.count > smoothingFrames { history.removeFirst() }
         distances = history.reduce(SIMD3<Float>(repeating: 0), +) / Float(history.count)
@@ -200,25 +228,20 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         let now = Date()
 
-        // Haptics alone say where and how close, so quiet mode works by touch:
-        // - clear path: one slow, steady tap so the wearer feels Firefly is working;
-        // - obstacle in the path: a rhythm for its side (see HapticPulser.directional) that repeats faster
-        //   as it gets closer, with a beep;
-        // - the last stretch before something ahead: a continuous buzz that strengthens as you approach.
+        // Something within speaking range is "in the path": fast pulses and beeps. Anything farther
+        // (or nothing at all) gets a steady heartbeat, so the wearer can feel Firefly is still working.
         let inPath = (alert?.distance ?? .infinity) < announceDistance
-        // Only for something straight ahead: a wall beside you in a hallway shouldn't buzz the whole way.
-        haptics.setSurface(closeness: alert.flatMap { $0.zone == .center ? surfaceCloseness($0.distance) : nil })
         if !inPath {
             if now.timeIntervalSince(lastPulse) >= heartbeatInterval {
                 lastPulse = now
-                haptics.pulse(intensity: pulseStrength)
+                haptics.heartbeat()
             }
-        } else if let alert, now.timeIntervalSince(lastPulse) >= rhythmInterval(for: alert) {
+        } else if let alert, now.timeIntervalSince(lastPulse) >= alert.interval {
             lastPulse = now
             if quietMode, alert.distance < stopDistance {
                 haptics.urgentStop()
             } else {
-                haptics.directional(alert.zone, intensity: pulseStrength)
+                haptics.pulse(intensity: alert.intensity)
             }
             if !quietMode, !handlingUtterance {
                 tones.beep(pan: 0)
@@ -227,25 +250,12 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             if alert.distance < stopDistance { mood = .danger }
         }
 
-        if speaker.isSpeaking {
-            speakingSince = speakingSince ?? now
-            if now.timeIntervalSince(speakingSince ?? now) > maxSpeakingTime {
-                speaker.stop()
-                speakingSince = nil
-            }
-        } else {
-            speakingSince = nil
-        }
-
+        speaker.recoverIfStuck()
         let speaking = speaker.isSpeaking
         if speaking != isSpeaking {
             isSpeaking = speaking
-            if speaking {
-                listener.setPaused(true)
-            } else if !handlingUtterance {
-                listener.setPaused(false)
-                if mood != .danger { mood = .idle }
-            }
+            syncListener()
+            if !speaking, !handlingUtterance, mood != .danger { mood = .idle }
         }
 
         speakWarnings(now: now)
@@ -257,10 +267,9 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         guard let alert else {
             lastAnnouncedZone = nil
-            lastAnnouncedDistance = .infinity
             lastAnnouncedName = ""
             inPathSince = nil
-            if wasClose, !quietMode, now.timeIntervalSince(lastVoice) > 2 {
+            if wasClose, !quietMode, now >= awaitingRequestUntil, now.timeIntervalSince(lastVoice) > 2 {
                 say("Clear path", allowNetwork: false)
             }
             wasClose = false
@@ -276,40 +285,59 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             if quietMode {
                 haptics.urgentStop()
             } else {
-                say("Stop", interrupt: true, allowNetwork: false)
+                say(dodge(for: alert).map { "Stop, \($0)" } ?? "Stop", interrupt: true, allowNetwork: false)
             }
             return
         }
 
-        guard !quietMode else { return }
+        guard !quietMode, now >= awaitingRequestUntil else { return }
         let geminiSpokeRecently = now.timeIntervalSince(lastHazardTime) < 6
-        let isNewZone = alert.zone != lastAnnouncedZone
-        let muchCloser = alert.distance < lastAnnouncedDistance - 0.6
-        let isStale = now.timeIntervalSince(lastAnnouncement) > 10
+        let isNewZone = alert.zone != lastAnnouncedZone || now.timeIntervalSince(lastAnnouncement) > 5
         let inPath = alert.distance < announceDistance
         if inPath { inPathSince = inPathSince ?? now } else { inPathSince = nil }
         let name = deviceName(for: alert.zone, now: now)
         let nameChanged = name != nil && name != lastAnnouncedName
         // Give the on-device namer a moment, so the first callout is "Chair ahead", not "Obstacle ahead".
         let waitingForName = name == nil && now.timeIntervalSince(inPathSince ?? now) < 0.8
-        if inPath, isNewZone || muchCloser || isStale || nameChanged, !waitingForName,
-           !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 3 {
+        if inPath, isNewZone || nameChanged, !waitingForName,
+           !geminiSpokeRecently, now.timeIntervalSince(lastVoice) > 2.5 {
             let spokenName = name ?? "Obstacle"
             if say(callout(spokenName, alert), allowNetwork: false) {
                 lastAnnouncedZone = alert.zone
-                lastAnnouncedDistance = alert.distance
                 lastAnnouncedName = spokenName
                 lastAnnouncement = now
             }
         }
     }
 
-    /// "Chair on your left, about 3 steps, maybe 7 feet". Each comma-separated part is a bundled clip.
+    /// "Chair on your left, about 7 feet, roughly 3 steps", plus "move left" and the like for something
+    /// ahead. Each comma-separated part is a bundled clip.
     private func callout(_ name: String, _ alert: ObstacleAlert) -> String {
         let direction = directionWord(alert.zone)
-        if profile?.verbosity == .brief { return "\(name) \(direction)" }
-        let detail = profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance)
-        return "\(name) \(direction), \(detail)"
+        var parts = ["\(name) \(direction)"]
+        if profile?.verbosity != .brief {
+            parts.append(profile?.formatDistance(alert.distance) ?? UserProfile.defaultDistance(alert.distance))
+        }
+        if let dodge = dodge(for: alert) { parts.append(dodge) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Which way to get around something. For anything in the path ahead (even when a side reads a few
+    /// centimetres nearer, as a big object right in front often does): "move" toward a side open enough to
+    /// step into, otherwise "turn" toward the more open side to look for a way through. For something
+    /// very close on one side only: move away from it.
+    private func dodge(for alert: ObstacleAlert) -> String? {
+        let left = distances[Zone.left.rawValue]
+        let center = distances[Zone.center.rawValue]
+        let right = distances[Zone.right.rawValue]
+        if center < announceDistance {
+            let side = left >= right ? "left" : "right"
+            return max(left, right) >= max(center + 0.7, 1.5) ? "move \(side)" : "turn \(side)"
+        }
+        if alert.distance < stopDistance {
+            return alert.zone == .left ? "move right" : "move left"
+        }
+        return nil
     }
 
     private func deviceName(for zone: Zone, now: Date = Date()) -> String? {
@@ -339,7 +367,36 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         guard !trimmed.isEmpty else { return }
         lastHeard = trimmed
         guard let command = Self.stripFireflyPrefix(trimmed) else { return }
+        // A short chime says "I heard you", so a slow answer isn't mistaken for not being heard.
+        // After an interruption it already chimed.
+        if Date() >= awaitingRequestUntil { tones.chime(pan: 0) }
+        awaitingRequestUntil = .distantPast
         Task { await handleCommand(command) }
+    }
+
+    /// The wearer said "Firefly" while Firefly was talking: go quiet at once and listen for the request.
+    private func interruptedByWearer() {
+        speechWatchTask?.cancel()
+        speaker.stop()
+        isSpeaking = false
+        caption = ""
+        awaitingRequestUntil = Date().addingTimeInterval(7)
+        mood = .listening
+        tones.chime(pan: 0)
+        syncListener()
+    }
+
+    /// What the mic listens for. Nothing while Firefly works on a question. While it talks, only "Firefly",
+    /// so the wearer can interrupt; but not during a line that itself says "Firefly", which would
+    /// interrupt itself. Otherwise, everything.
+    private func syncListener() {
+        let talking = speaker.isSpeaking
+        if handlingUtterance || talking && caption.lowercased().contains("firefly") {
+            listener.setPaused(true)
+        } else {
+            listener.setSpeaking(talking)
+            listener.setPaused(false)
+        }
     }
 
     private static func stripFireflyPrefix(_ text: String) -> String? {
@@ -355,13 +412,15 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func handleCommand(_ command: String) async {
         handlingUtterance = true
+        handlingSince = Date()
         isHandling = true
         mood = .thinking
         listener.setPaused(true)
         defer {
             handlingUtterance = false
+            handlingSince = nil
             isHandling = false
-            listener.setPaused(speaker.isSpeaking)
+            syncListener()
             if mood == .thinking { mood = .idle }
         }
 
@@ -383,24 +442,20 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        if let reply = applySetting(lowered) {
-            say(reply, interrupt: true)
-            return
-        }
-
-        if lowered.contains("help") || lowered.contains("emergency") {
+        if lowered == "help" || lowered == "help me" || lowered.contains("emergency") {
             mood = .danger
             say("I'm with you. Stay still if it feels unsafe. Call out for people nearby. I can describe what's around — ask me.", interrupt: true)
             return
         }
 
-        if lowered.contains("stop") || lowered.contains("cancel") || lowered.contains("never mind") {
+        if lowered.hasPrefix("stop") && !lowered.contains("sign") || lowered.contains("cancel") || lowered.contains("never mind") {
             speaker.stop()
             say("Okay", interrupt: true)
             return
         }
 
-        if lowered.contains("close") || lowered.contains("quit") || lowered.contains("exit the app") {
+        if lowered == "close" || lowered.contains("close the app") || lowered.contains("close firefly")
+            || lowered.contains("quit") || lowered.contains("exit the app") {
             say("Closing Firefly.", interrupt: true)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             UIApplication.shared.perform(Selector(("suspend")))
@@ -410,38 +465,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         // Anything else is a question about what the camera sees: "what's in front of me?",
         // "what does that sign say?", "is that door open?".
         await describeScene(prompt: command)
-    }
-
-    /// Settings by voice: "Firefly, use metric", "use imperial", "shorter", "more detail", "careful pace",
-    /// "normal pace". Returns the confirmation to speak, or nil if the command isn't a setting.
-    private func applySetting(_ lowered: String) -> String? {
-        var updated = profile ?? .standard
-        let reply: String
-        if lowered.contains("metric") || lowered.contains("meters") || lowered.contains("metres") {
-            updated.units = .metersFirst
-            reply = "Okay, I'll use meters."
-        } else if lowered.contains("imperial") || lowered.contains("feet") {
-            updated.units = .stepsFirst
-            reply = "Okay, I'll use steps and feet."
-        } else if lowered.contains("brief") || lowered.contains("shorter") || lowered.contains("less detail") {
-            updated.verbosity = .brief
-            reply = "Okay, I'll keep it short."
-        } else if lowered.contains("more detail") || lowered.contains("normal detail") || lowered.contains("full detail") {
-            updated.verbosity = .normal
-            reply = "Okay, I'll give more detail."
-        } else if lowered.contains("careful pace") || lowered.contains("slow pace") || lowered.contains("walk careful")
-                    || lowered.contains("walking slowly") {
-            updated.pace = .careful
-            reply = "Okay, I'll count shorter steps."
-        } else if lowered.contains("normal pace") || lowered.contains("regular pace") {
-            updated.pace = .normal
-            reply = "Okay, normal steps."
-        } else {
-            return nil
-        }
-        updated.save()
-        profile = updated
-        return reply
     }
 
     private func describeScene(prompt: String) async {
@@ -471,7 +494,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Gemini naming (only for what the phone couldn't name)
 
     private func runSceneLoop(now: Date) {
-        guard !quietMode, !handlingUtterance, !sceneRequestActive,
+        guard !quietMode, !handlingUtterance, !sceneRequestActive, now >= awaitingRequestUntil,
               now.timeIntervalSince(lastSceneRequest) >= sceneInterval,
               now >= geminiPausedUntil,
               let alert, alert.distance < announceDistance, deviceName(for: alert.zone) == nil
@@ -505,7 +528,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             lastHazard = hazard
             lastHazardTime = now
             lastAnnouncedZone = alert.zone
-            lastAnnouncedDistance = alert.distance
             lastAnnouncedName = name
             lastAnnouncement = now
         }
@@ -545,13 +567,14 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         caption = text
         lastVoice = Date()
         isSpeaking = true
-        listener.setPaused(true)
+        syncListener()
         if mood != .danger { mood = .listening }
         watchSpeechEnd()
         return true
     }
 
-    /// ElevenLabs TTS is async, so speaker.isSpeaking is false for a bit after say() — keep mic paused until audio finishes.
+    /// ElevenLabs TTS is async, so speaker.isSpeaking is false for a bit after say(); the mic stays in
+    /// "Firefly only" mode until the audio finishes.
     private func watchSpeechEnd() {
         speechWatchTask?.cancel()
         speechWatchTask = Task { @MainActor in
@@ -565,9 +588,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             self.isSpeaking = false
-            if !self.handlingUtterance {
-                self.listener.setPaused(false)
-            }
+            self.syncListener()
             if self.mood == .listening { self.mood = .idle }
         }
     }
