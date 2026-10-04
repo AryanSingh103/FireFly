@@ -13,10 +13,19 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         case idle, listening, thinking, danger, happy
     }
 
+    /// Where the nearest obstacle is, for the on-screen Firefly to fly toward. Display only.
+    struct ObstacleTarget: Equatable {
+        let zone: Zone
+        /// 0 = far, 1 = in the path, 2 = very close.
+        let closeness: Int
+    }
+
     private(set) var distances = SIMD3<Float>(repeating: 5)
     private(set) var alert: ObstacleAlert?
     /// Published only when it flips, unlike `alert`, which changes every frame.
     @Published private(set) var obstacleNear = false
+    /// Also published only when it changes.
+    @Published private(set) var obstacleTarget: ObstacleTarget?
     @Published private(set) var pulseCount = 0
     @Published private(set) var caption = ""
     @Published private(set) var status = "Starting"
@@ -244,6 +253,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         distances = history.reduce(SIMD3<Float>(repeating: 0), +) / Float(history.count)
         alert = AlertPolicy.alert(for: distances)
         if (alert != nil) != obstacleNear { obstacleNear = alert != nil }
+        let target = alert.map { alert in
+            ObstacleTarget(zone: alert.zone,
+                           closeness: alert.distance < stopDistance ? 2 : alert.distance < announceDistance ? 1 : 0)
+        }
+        if target != obstacleTarget { obstacleTarget = target }
 
         let now = Date()
 

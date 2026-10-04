@@ -17,7 +17,7 @@ struct ContentView: View {
             // Firefly orb + captions
             VStack {
                 Spacer()
-                FireflyOrb(mood: engine.mood, isSpeaking: engine.isSpeaking, glow: glow)
+                FireflyOrb(mood: engine.mood, isSpeaking: engine.isSpeaking, target: engine.obstacleTarget, glow: glow)
                     .padding(.bottom, 8)
 
                 Text(engine.caption)
@@ -100,11 +100,24 @@ struct LiveCameraView: UIViewRepresentable {
 // MARK: - Firefly
 
 /// The Firefly creature: a glowing body with flapping wings, a breathing halo and drifting sparkles.
-/// Mood changes its colour, speed and how much it moves. Drawn with Canvas at up to 30 fps.
+/// Mood changes its colour, speed and how much it moves. It flies toward the side of the nearest obstacle
+/// (faster when it's closer) and leaves a fading trail. Drawn with Canvas at up to 30 fps.
 struct FireflyOrb: View {
     let mood: FireflyEngine.Mood
     let isSpeaking: Bool
+    let target: FireflyEngine.ObstacleTarget?
     let glow: Color
+
+    /// Where it is and where it's been. A class so the Canvas can update it each frame without re-rendering.
+    private final class Flight {
+        /// Horizontal position: -1 is the left end of its range, 0 home, 1 the right end.
+        var x = 0.0
+        var lastTime: Double?
+        var trail: [(point: CGPoint, time: Double)] = []
+    }
+
+    @State private var flight = Flight()
+    private let trailLifetime = 0.6
 
     private var tint: Color {
         switch mood {
@@ -134,7 +147,8 @@ struct FireflyOrb: View {
                 draw(in: &context, size: size, time: t)
             }
         }
-        .frame(width: 140, height: 120)
+        .frame(maxWidth: .infinity)
+        .frame(height: 120)
         .opacity(visible ? 1 : 0.45)
         .animation(.easeInOut(duration: 0.4), value: visible)
         .accessibilityHidden(true)
@@ -142,12 +156,31 @@ struct FireflyOrb: View {
 
     private func draw(in context: inout GraphicsContext, size: CGSize, time t: Double) {
         let color = tint
+
+        // Fly toward the obstacle's side, quicker the closer it is; drift home when the way is clear.
+        let dt = min(t - (flight.lastTime ?? t), 0.1)
+        flight.lastTime = t
+        let goal = target.map { $0.zone == .left ? -1.0 : $0.zone == .right ? 1.0 : 0.0 } ?? 0
+        let rate = target.map { [1.5, 3.0, 6.0][min($0.closeness, 2)] } ?? 1.2
+        flight.x += (goal - flight.x) * (1 - exp(-rate * dt))
+        let range = max(size.width / 2 - 70, 0)
+
         // Hover: a slow figure-eight, bigger when lively.
         let drift = 6 + 8 * energy
         let center = CGPoint(
-            x: size.width / 2 + CGFloat(sin(t * 0.9) * drift),
+            x: size.width / 2 + CGFloat(flight.x) * range + CGFloat(sin(t * 0.9) * drift),
             y: size.height / 2 + CGFloat(sin(t * 1.8) * drift * 0.5)
         )
+
+        // Trail: recent positions as small embers that shrink and fade.
+        flight.trail.append((center, t))
+        flight.trail.removeAll { t - $0.time > trailLifetime }
+        for (point, time) in flight.trail.dropLast() {
+            let life = 1 - (t - time) / trailLifetime
+            let r = CGFloat(1 + 3 * life)
+            context.fill(Path(ellipseIn: CGRect(x: point.x - r, y: point.y + 4 - r, width: 2 * r, height: 2 * r)),
+                         with: .color(color.opacity(0.5 * life)))
+        }
 
         // Breathing glow; speaking makes it flicker like a voice.
         let breath = 0.5 + 0.5 * sin(t * (mood == .danger ? 9 : 2.2))
