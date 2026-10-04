@@ -19,7 +19,7 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var caption = ""
     @Published private(set) var status = "Starting"
     @Published private(set) var guideMode = GuideMode.passive
-    @Published private(set) var phase = AgentPhase.onboarding
+    @Published private(set) var phase = AgentPhase.ready
     @Published private(set) var mood = Mood.idle
     @Published private(set) var isSpeaking = false
     @Published private(set) var quietMode = false
@@ -84,14 +84,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     private var lastBeaconLine = Date.distantPast
     private var lastAnnouncedDistance: Float = .infinity
     private var flipWarned = false
-    private var onboardingStep = 0
-    private var draft = UserProfile(
-        name: "",
-        verbosity: .normal,
-        units: .stepsFirst,
-        pace: .normal,
-        quietByDefault: false
-    )
     private var handlingUtterance = false
     private var askedExitFirst = false
     private var speechWatchTask: Task<Void, Never>?
@@ -102,13 +94,10 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     override init() {
         super.init()
-        profile = UserProfile.load()
-        if let profile {
-            quietMode = profile.quietByDefault
-            phase = .ready
-        } else {
-            phase = .onboarding
-        }
+        // No setup questions: start with standard settings, changed later by voice ("Firefly, use metric").
+        let saved = UserProfile.load() ?? .standard
+        profile = saved
+        quietMode = saved.quietByDefault
         listener.onUtterance = { [weak self] text in
             Task { @MainActor in self?.handleUtterance(text) }
         }
@@ -251,7 +240,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private func speakWarnings(now: Date) {
-        guard phase != .onboarding else { return }
         guard !handlingUtterance else { return }
         // BlindSpot: don't let obstacle callouts talk over the opening nav summary.
         if maps.isInInitialNavPhase { return }
@@ -391,32 +379,19 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         say("Found the \(newBeacon.name). I'll guide you there.", interrupt: true)
     }
 
-    // MARK: - Launch / onboarding
+    // MARK: - Launch
 
-    /// Both greetings are fixed sentences with bundled clips, so the first thing anyone hears is
-    /// Firefly's voice instantly, with or without Wi-Fi.
+    /// A fixed sentence with a bundled clip, so the first thing anyone hears is Firefly's voice instantly,
+    /// with or without Wi-Fi.
     private func greetOnLaunch() async {
-        if profile != nil {
-            phase = .ready
-            say("Hi, I'm Firefly. I'll help you get around. Where would you like to go?", interrupt: true)
-            status = "Say Firefly, then your request"
-        } else {
-            phase = .onboarding
-            onboardingStep = 0
-            say("Hi, I'm Firefly. I'll help you get around. First, what's your name?", interrupt: true)
-            status = "Onboarding"
-        }
+        say("Hi, I'm Firefly. I'll help you get around. Where would you like to go?", interrupt: true)
+        status = "Say Firefly, then your request"
     }
 
     private func handleUtterance(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastHeard = trimmed
-
-        if phase == .onboarding {
-            Task { await advanceOnboarding(with: trimmed) }
-            return
-        }
 
         if phase == .awaitingNavConfirm {
             Task { await handleNavConfirm(trimmed) }
@@ -442,75 +417,6 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
         // Exact wake only
         if lowered == "firefly" || lowered == "hey firefly" { return "" }
         return nil
-    }
-
-    private func advanceOnboarding(with text: String) async {
-        handlingUtterance = true
-        listener.setPaused(true)
-        defer {
-            handlingUtterance = false
-            listener.setPaused(speaker.isSpeaking)
-        }
-        let lowered = text.lowercased()
-        switch onboardingStep {
-        case 0:
-            guard let name = Self.name(from: text) else {
-                say("Sorry, I didn't catch your name. What should I call you?", interrupt: true)
-                return
-            }
-            draft.name = name
-            onboardingStep = 1
-            say("Nice to meet you, \(draft.name). Do you want brief updates, or normal detail?", interrupt: true)
-        case 1:
-            draft.verbosity = lowered.contains("brief") || lowered.contains("short") ? .brief : .normal
-            onboardingStep = 2
-            say("Got it. Should I lead with steps, or with distance in feet?", interrupt: true)
-        case 2:
-            if lowered.contains("meter") || lowered.contains("metric") {
-                draft.units = .metersFirst
-            } else if lowered.contains("distance") || lowered.contains("feet") || lowered.contains("foot") {
-                draft.units = .distanceFirst
-            } else {
-                draft.units = .stepsFirst
-            }
-            onboardingStep = 3
-            say("Okay. Careful walking pace, or normal?", interrupt: true)
-        case 3:
-            draft.pace = lowered.contains("careful") || lowered.contains("slow") ? .careful : .normal
-            onboardingStep = 4
-            say("Last thing — start in quiet mode with haptics only? Yes or no.", interrupt: true)
-        case 4:
-            draft.quietByDefault = lowered.hasPrefix("y") || lowered.contains("yes") || lowered.contains("quiet")
-            quietMode = draft.quietByDefault
-            draft.save()
-            profile = draft
-            phase = .ready
-            onboardingStep = 5
-            mood = .happy
-            say("Thanks, \(draft.name). I'm Firefly — I'll watch with you. Say Firefly, nowhere to stay passive, or tell me where to go with Firefly.", interrupt: true)
-            status = "Say Firefly, then your request"
-        default:
-            phase = .ready
-        }
-    }
-
-    /// Words that are never a name; usually the mic caught Firefly's own question or a filler word.
-    private static let notNames: Set<String> = [
-        "what", "what's", "whats", "your", "name", "my", "is", "the", "a", "firefly", "hi", "hey", "hello",
-        "um", "uh", "okay", "ok", "yes", "no", "first", "sorry", "i", "it", "it's", "you", "help", "get", "around",
-    ]
-
-    /// "My name is Aryan." -> "Aryan". nil if what was heard doesn't look like a name.
-    private static func name(from text: String) -> String? {
-        var rest = text.lowercased()
-        for lead in ["my name is ", "my name's ", "i'm ", "i am ", "it's ", "it is ", "call me ", "this is ", "hi ", "hey "]
-        where rest.hasPrefix(lead) {
-            rest = String(rest.dropFirst(lead.count))
-        }
-        let word = rest.split(separator: " ").first.map(String.init) ?? rest
-        let letters = word.trimmingCharacters(in: CharacterSet.letters.inverted)
-        guard !letters.isEmpty, !notNames.contains(letters.lowercased()) else { return nil }
-        return letters.prefix(1).uppercased() + letters.dropFirst()
     }
 
     private func handleCommand(_ command: String) async {
@@ -540,6 +446,11 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
             || lowered.contains("speak again") || lowered.contains("talk again") {
             quietMode = false
             say("Quiet mode off. I'll speak again.", interrupt: true)
+            return
+        }
+
+        if let reply = applySetting(lowered) {
+            say(reply, interrupt: true)
             return
         }
 
@@ -608,6 +519,38 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
         // Fallback: treat as scene question
         await describeScene(prompt: command)
+    }
+
+    /// Settings by voice: "Firefly, use metric", "use imperial", "shorter", "more detail", "careful pace",
+    /// "normal pace". Returns the confirmation to speak, or nil if the command isn't a setting.
+    private func applySetting(_ lowered: String) -> String? {
+        var updated = profile ?? .standard
+        let reply: String
+        if lowered.contains("metric") || lowered.contains("meters") || lowered.contains("metres") {
+            updated.units = .metersFirst
+            reply = "Okay, I'll use meters."
+        } else if lowered.contains("imperial") || lowered.contains("feet") {
+            updated.units = .stepsFirst
+            reply = "Okay, I'll use steps and feet."
+        } else if lowered.contains("brief") || lowered.contains("shorter") || lowered.contains("less detail") {
+            updated.verbosity = .brief
+            reply = "Okay, I'll keep it short."
+        } else if lowered.contains("more detail") || lowered.contains("normal detail") || lowered.contains("full detail") {
+            updated.verbosity = .normal
+            reply = "Okay, I'll give more detail."
+        } else if lowered.contains("careful pace") || lowered.contains("slow pace") || lowered.contains("walk careful")
+                    || lowered.contains("walking slowly") {
+            updated.pace = .careful
+            reply = "Okay, I'll count shorter steps."
+        } else if lowered.contains("normal pace") || lowered.contains("regular pace") {
+            updated.pace = .normal
+            reply = "Okay, normal steps."
+        } else {
+            return nil
+        }
+        updated.save()
+        profile = updated
+        return reply
     }
 
     private func isPassiveIntent(_ lowered: String) -> Bool {

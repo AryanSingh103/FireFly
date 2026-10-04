@@ -63,7 +63,6 @@ struct ContentView: View {
 
     private var modeLabel: String {
         switch engine.phase {
-        case .onboarding: return "Setup"
         case .awaitingNavConfirm: return "Confirm destination"
         case .handling: return "Thinking"
         case .ready:

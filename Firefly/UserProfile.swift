@@ -24,6 +24,9 @@ struct UserProfile: Codable, Equatable {
 
     static let storageKey = "firefly.userProfile"
 
+    /// What Firefly uses until changed by voice: normal detail, steps and feet, normal pace, speaking.
+    static let standard = UserProfile(name: "", verbosity: .normal, units: .stepsFirst, pace: .normal, quietByDefault: false)
+
     static func load() -> UserProfile? {
         guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
         return try? JSONDecoder().decode(UserProfile.self, from: data)
@@ -55,7 +58,7 @@ struct UserProfile: Codable, Equatable {
         }
     }
 
-    /// Used before onboarding has picked units.
+    /// Used when no profile is available.
     static func defaultDistance(_ meters: Float) -> String {
         "about \(feet(meters)) feet"
     }
@@ -71,7 +74,6 @@ enum GuideMode: String {
 }
 
 enum AgentPhase: String {
-    case onboarding
     case ready
     case awaitingNavConfirm
     case handling
