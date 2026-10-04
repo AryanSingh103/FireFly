@@ -393,15 +393,17 @@ final class FireflyEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Launch / onboarding
 
+    /// Both greetings are fixed sentences with bundled clips, so the first thing anyone hears is
+    /// Firefly's voice instantly, with or without Wi-Fi.
     private func greetOnLaunch() async {
-        if let profile {
+        if profile != nil {
             phase = .ready
-            say("Hi \(profile.name), how can I help? Where do you want to go?", interrupt: true)
+            say("Hi, I'm Firefly. I'll help you get around. Where would you like to go?", interrupt: true)
             status = "Say Firefly, then your request"
         } else {
             phase = .onboarding
             onboardingStep = 0
-            say("Hi — I'm Firefly. What's your name?", interrupt: true)
+            say("Hi, I'm Firefly. I'll help you get around. First, what's your name?", interrupt: true)
             status = "Onboarding"
         }
     }

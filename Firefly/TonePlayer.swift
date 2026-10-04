@@ -12,7 +12,8 @@ final class TonePlayer {
 
     init() {
         beepData = TonePlayer.render(duration: 0.06) { time, progress in
-            sin(2 * Float.pi * 880 * time) * sin(Float.pi * progress) * 0.55
+            // A soft, lower tone: the vibration carries urgency, the beep only marks it.
+            sin(2 * Float.pi * 660 * time) * sin(Float.pi * progress) * 0.55
         }
         chimeData = TonePlayer.render(duration: 0.35) { time, progress in
             let bell = sin(2 * Float.pi * 1320 * time) + 0.4 * sin(2 * Float.pi * 1980 * time)
@@ -26,6 +27,8 @@ final class TonePlayer {
 
         beepPlayer = try? AVAudioPlayer(data: beepData)
         chimePlayer = try? AVAudioPlayer(data: chimeData)
+        beepPlayer?.volume = 0.2
+        chimePlayer?.volume = 0.5
         beepPlayer?.prepareToPlay()
         chimePlayer?.prepareToPlay()
     }
